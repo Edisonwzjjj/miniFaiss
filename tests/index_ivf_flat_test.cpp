@@ -1,3 +1,4 @@
+#include "minifaiss/index_flat_ip.hpp"
 #include "minifaiss/index_ivf_flat.hpp"
 
 #include <array>
@@ -147,6 +148,68 @@ void test_add_requires_training_and_preserves_size(TestRunner& tests) {
     tests.check(index.size() == 3, "non-finite add preserves size");
 }
 
+void test_full_probe_matches_flat_search(TestRunner& tests) {
+    constexpr std::size_t dimension = 2;
+    constexpr std::size_t nlist = 2;
+
+    const std::array<float, 8> training_vectors = {
+        1.0F, 0.0F,
+        0.0F, 1.0F,
+        0.8F, 0.2F,
+        0.1F, 0.9F,
+    };
+    const std::array<float, 12> item_vectors = {
+        0.9F, 0.1F,
+        0.2F, 0.8F,
+        1.0F, 0.3F,
+        0.1F, 1.0F,
+        -0.8F, 0.2F,
+        0.4F, 0.4F,
+    };
+    const std::array<std::array<float, 2>, 3> queries = {{
+        {1.0F, 0.2F},
+        {0.2F, 1.0F},
+        {-1.0F, 0.1F},
+    }};
+    const std::array<std::size_t, 4> k_values = {1, 3, 6, 10};
+
+    minifaiss::IndexFlatIP flat_index(dimension);
+    flat_index.add(item_vectors);
+
+    minifaiss::IndexIVFFlat ivf_index(dimension, nlist);
+    ivf_index.train(training_vectors, 2);
+    ivf_index.add(std::array<float, 6>{
+        0.9F, 0.1F,
+        0.2F, 0.8F,
+        1.0F, 0.3F,
+    });
+    ivf_index.add(std::array<float, 6>{
+        0.1F, 1.0F,
+        -0.8F, 0.2F,
+        0.4F, 0.4F,
+    });
+
+    for (const auto& query : queries) {
+        for (const std::size_t k : k_values) {
+            const auto expected = flat_index.search(query, k);
+            const auto actual = ivf_index.search(query, k, nlist);
+
+            tests.check(actual.size() == expected.size(),
+                        "full-probe IVF result count matches Flat");
+            if (actual.size() != expected.size()) {
+                continue;
+            }
+
+            for (std::size_t result_id = 0; result_id < actual.size(); ++result_id) {
+                tests.check(actual[result_id].id == expected[result_id].id,
+                            "full-probe IVF ID matches Flat");
+                tests.check(actual[result_id].score == expected[result_id].score,
+                            "full-probe IVF score matches Flat");
+            }
+        }
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -157,6 +220,7 @@ int main() {
     test_train_sets_trained_state(tests);
     test_train_rejects_invalid_input(tests);
     test_add_requires_training_and_preserves_size(tests);
+    test_full_probe_matches_flat_search(tests);
 
     if (tests.exit_code() == 0) {
         std::cout << "All IndexIVFFlat lifecycle tests passed.\n";

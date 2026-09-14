@@ -26,10 +26,26 @@ public:
                                                  std::size_t nprobe = 1) const;
 
 private:
-  struct InvertedList {
-    std::vector<float> vectors;
-    std::vector<std::size_t> ids;
-  };
+    struct InvertedList {
+        std::vector<float> vectors;
+        std::vector<std::size_t> ids;
+    };
+
+
+    struct CentroidScore {
+        std::size_t list_id;
+        float score;
+    };
+
+    struct BetterSearchResult {
+        bool operator()(const SearchResult& lhs,
+                        const SearchResult& rhs) const {
+            if (lhs.score != rhs.score) {
+                return lhs.score > rhs.score;
+            }
+            return lhs.id < rhs.id;
+        }
+    };
 
   std::size_t dimension_;
   std::size_t nlist_;

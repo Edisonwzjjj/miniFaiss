@@ -1,6 +1,8 @@
 #include "minifaiss/index_ivf_flat.hpp"
 
+#include <algorithm>
 #include <cmath>
+#include <queue>
 #include <stdexcept>
 #include <utility>
 #include <vector>
@@ -149,6 +151,94 @@ void IndexIVFFlat::add(std::span<const float> vectors) {
     }
 
     size_ += vector_count;
+}
+
+
+std::vector<SearchResult> IndexIVFFlat::search(
+    std::span<const float> query,
+    std::size_t k,
+    std::size_t nprobe) const {
+  if (!is_trained()) {
+    throw std::logic_error("cannot search an untrained index");
+  }
+
+  if (query.size() != dimension_) {
+    throw std::invalid_argument("query dimension must match index dimension");
+  }
+
+  if (k == 0) {
+    throw std::invalid_argument("k must be greater than zero");
+  }
+
+  if (nprobe == 0 || nprobe > nlist_) {
+    throw std::invalid_argument("nprobe must be between one and nlist");
+  }
+
+  for (const float value : query) {
+    if (!std::isfinite(value)) {
+      throw std::invalid_argument("query must contain only finite values");
+    }
+  }
+
+  std::vector<CentroidScore> centroid_scores;
+  centroid_scores.reserve(nlist_);
+  for (std::size_t list_id = 0; list_id < nlist_; ++list_id) {
+    const float* centroid = centroids_.data() + list_id * dimension_;
+    centroid_scores.push_back(
+        {list_id, inner_product(query.data(), centroid, dimension_)});
+  }
+
+  std::sort(
+      centroid_scores.begin(),
+      centroid_scores.end(),
+      [](const CentroidScore& lhs, const CentroidScore& rhs) {
+        if (lhs.score != rhs.score) {
+          return lhs.score > rhs.score;
+        }
+        return lhs.list_id < rhs.list_id;
+      });
+
+  std::priority_queue<SearchResult, std::vector<SearchResult>,
+                      BetterSearchResult>
+      search_heap;
+
+  for (std::size_t probe_id = 0; probe_id < nprobe; ++probe_id) {
+    const InvertedList& list = lists_[centroid_scores[probe_id].list_id];
+    const std::size_t vector_count = list.vectors.size() / dimension_;
+
+    for (std::size_t local_id = 0; local_id < vector_count; ++local_id) {
+      const float* item = list.vectors.data() + local_id * dimension_;
+      const SearchResult candidate{
+          list.ids[local_id],
+          inner_product(query.data(), item, dimension_),
+      };
+
+      if (search_heap.size() < k) {
+        search_heap.push(candidate);
+      } else if (BetterSearchResult{}(candidate, search_heap.top())) {
+        search_heap.pop();
+        search_heap.push(candidate);
+      }
+    }
+  }
+
+  std::vector<SearchResult> results;
+  results.reserve(std::min(k, size_));
+  while (!search_heap.empty()) {
+    results.push_back(search_heap.top());
+    search_heap.pop();
+  }
+
+  std::sort(
+      results.begin(),
+      results.end(),
+      [](const SearchResult& lhs, const SearchResult& rhs) {
+        if (lhs.score != rhs.score) {
+          return lhs.score > rhs.score;
+        }
+        return lhs.id < rhs.id;
+      });
+  return results;
 }
 
 std::size_t IndexIVFFlat::dimension() const noexcept { return dimension_; }
