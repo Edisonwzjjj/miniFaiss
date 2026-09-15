@@ -148,6 +148,77 @@ void test_add_requires_training_and_preserves_size(TestRunner& tests) {
     tests.check(index.size() == 3, "non-finite add preserves size");
 }
 
+void test_search_rejects_invalid_input(TestRunner& tests) {
+    minifaiss::IndexIVFFlat untrained_index(2, 2);
+    tests.check_throws_logic_error(
+        [&untrained_index] {
+            (void)untrained_index.search(std::array<float, 2>{1.0F, 0.0F}, 1);
+        },
+        "search before training is rejected");
+
+    minifaiss::IndexIVFFlat index(2, 2);
+    index.train(std::array<float, 4>{1.0F, 0.0F, 0.0F, 1.0F}, 1);
+
+    const auto empty_results =
+        index.search(std::array<float, 2>{1.0F, 0.0F}, 1, 1);
+    tests.check(empty_results.empty(), "trained empty index returns no results");
+
+    tests.check_throws_invalid_argument(
+        [&index] { (void)index.search(std::array<float, 1>{1.0F}, 1); },
+        "short query is rejected");
+    tests.check_throws_invalid_argument(
+        [&index] {
+            (void)index.search(
+                std::array<float, 4>{1.0F, 0.0F, 1.0F, 0.0F}, 1);
+        },
+        "long query is rejected");
+    tests.check_throws_invalid_argument(
+        [&index] {
+            (void)index.search(std::array<float, 2>{
+                1.0F,
+                std::numeric_limits<float>::quiet_NaN(),
+            }, 1);
+        },
+        "non-finite query is rejected");
+    tests.check_throws_invalid_argument(
+        [&index] { (void)index.search(std::array<float, 2>{1.0F, 0.0F}, 0); },
+        "zero k is rejected");
+    tests.check_throws_invalid_argument(
+        [&index] { (void)index.search(std::array<float, 2>{1.0F, 0.0F}, 1, 0); },
+        "zero nprobe is rejected");
+    tests.check_throws_invalid_argument(
+        [&index] { (void)index.search(std::array<float, 2>{1.0F, 0.0F}, 1, 3); },
+        "nprobe larger than nlist is rejected");
+}
+
+void test_single_probe_searches_one_list(TestRunner& tests) {
+    minifaiss::IndexIVFFlat index(2, 2);
+    index.train(std::array<float, 4>{
+        1.0F, 0.0F,
+        0.0F, 1.0F,
+    }, 1);
+
+    index.add(std::array<float, 6>{
+        0.9F, 0.1F,
+        0.8F, 0.2F,
+        0.1F, 0.9F,
+    });
+
+    const auto results =
+        index.search(std::array<float, 2>{1.0F, 0.0F}, 10, 1);
+
+    tests.check(results.size() == 2,
+                "single probe returns only candidates in selected list");
+    tests.check(results[0].id == 0,
+                "single probe returns the best item in selected list");
+    tests.check(results[0].score == 0.9F,
+                "single probe returns the best selected-list score");
+    tests.check(results[1].id == 1,
+                "single probe excludes vectors in unprobed lists");
+    tests.check(results[1].score == 0.8F,
+                "single probe preserves selected-list ranking");
+}
+
 void test_full_probe_matches_flat_search(TestRunner& tests) {
     constexpr std::size_t dimension = 2;
     constexpr std::size_t nlist = 2;
@@ -220,6 +291,8 @@ int main() {
     test_train_sets_trained_state(tests);
     test_train_rejects_invalid_input(tests);
     test_add_requires_training_and_preserves_size(tests);
+    test_search_rejects_invalid_input(tests);
+    test_single_probe_searches_one_list(tests);
     test_full_probe_matches_flat_search(tests);
 
     if (tests.exit_code() == 0) {

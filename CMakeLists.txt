@@ -22,6 +22,7 @@ endfunction()
 add_library(minifaiss STATIC
     src/index_flat_ip.cpp
     src/index_ivf_flat.cpp
+    src/product_quantizer.cpp
 )
 
 target_include_directories(minifaiss
@@ -52,6 +53,16 @@ add_executable(minifaiss_ivf_flat_tests
 target_link_libraries(minifaiss_ivf_flat_tests PRIVATE minifaiss)
 enable_project_warnings(minifaiss_ivf_flat_tests)
 add_test(NAME minifaiss_ivf_flat_tests COMMAND minifaiss_ivf_flat_tests)
+
+add_executable(minifaiss_product_quantizer_tests
+    tests/product_quantizer_test.cpp
+)
+target_link_libraries(minifaiss_product_quantizer_tests PRIVATE minifaiss)
+enable_project_warnings(minifaiss_product_quantizer_tests)
+add_test(
+    NAME minifaiss_product_quantizer_tests
+    COMMAND minifaiss_product_quantizer_tests
+)
 
 add_executable(minifaiss_bench
     benchmarks/bench_flat_ip.cpp
