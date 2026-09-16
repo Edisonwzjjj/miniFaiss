@@ -110,4 +110,33 @@ std::vector<SearchResult> IndexFlatIP::search(std::span<const float> query,
     return results;
 }
 
+std::vector<std::vector<SearchResult>> IndexFlatIP::search_batch(
+    std::span<const float> queries, std::size_t k) const {
+    if (k == 0) {
+        throw std::invalid_argument("k must be greater than zero");
+    }
+    if (queries.size() % dimension_ != 0) {
+        throw std::invalid_argument(
+            "query count must be divisible by dimension");
+    }
+    for (const float value : queries) {
+        if (!std::isfinite(value)) {
+            throw std::invalid_argument(
+                "queries must contain only finite values");
+        }
+    }
+
+    const std::size_t query_count = queries.size() / dimension_;
+    std::vector<std::vector<SearchResult>> results;
+    results.reserve(query_count);
+
+    for (std::size_t query_id = 0; query_id < query_count; ++query_id) {
+        const std::span<const float> query(
+            queries.data() + query_id * dimension_, dimension_);
+        results.push_back(search(query, k));
+    }
+
+    return results;
+}
+
 }  // namespace minifaiss

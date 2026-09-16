@@ -206,6 +206,71 @@ void test_search_rejects_invalid_input(TestRunner& tests) {
         "nprobe larger than nlist is rejected");
 }
 
+void test_search_batch_matches_scalar_search(TestRunner& tests) {
+    minifaiss::IndexIVFFlat index(2, 2);
+    index.train(std::array<float, 4>{1.0F, 0.0F, 0.0F, 1.0F}, 1);
+    index.add(std::array<float, 6>{
+        0.9F,
+        0.1F,
+        0.8F,
+        0.2F,
+        0.1F,
+        0.9F,
+    });
+
+    const std::array<float, 4> queries = {1.0F, 0.0F, 0.0F, 1.0F};
+    const auto batch_results = index.search_batch(queries, 10, 1);
+    tests.check(batch_results.size() == 2,
+                "IVF batch search returns one row per query");
+
+    for (std::size_t query_id = 0; query_id < batch_results.size();
+         ++query_id) {
+        const std::span<const float> query(queries.data() + query_id * 2, 2);
+        const auto scalar_results = index.search(query, 10, 1);
+        tests.check(batch_results[query_id].size() == scalar_results.size(),
+                    "IVF batch result count matches scalar search");
+        for (std::size_t rank = 0; rank < scalar_results.size(); ++rank) {
+            tests.check(
+                batch_results[query_id][rank].id == scalar_results[rank].id,
+                "IVF batch result ID matches scalar search");
+            tests.check(batch_results[query_id][rank].score ==
+                            scalar_results[rank].score,
+                        "IVF batch result score matches scalar search");
+        }
+    }
+
+    tests.check(index.search_batch(std::span<const float>{}, 1, 1).empty(),
+                "IVF empty query batch returns no rows");
+    tests.check_throws_invalid_argument(
+        [&index] {
+            (void)index.search_batch(std::array<float, 3>{1.0F, 0.0F, 1.0F}, 1,
+                                     1);
+        },
+        "IVF incomplete packed query batch is rejected");
+    tests.check_throws_invalid_argument(
+        [&index] {
+            (void)index.search_batch(
+                std::array<float, 4>{
+                    1.0F,
+                    0.0F,
+                    std::numeric_limits<float>::quiet_NaN(),
+                    1.0F,
+                },
+                1, 1);
+        },
+        "IVF non-finite later batch query is rejected");
+    tests.check_throws_invalid_argument(
+        [&index] { (void)index.search_batch(std::span<const float>{}, 1, 0); },
+        "IVF invalid nprobe rejects an empty query batch");
+
+    minifaiss::IndexIVFFlat untrained_index(2, 2);
+    tests.check_throws_logic_error(
+        [&untrained_index] {
+            (void)untrained_index.search_batch(std::span<const float>{}, 1, 1);
+        },
+        "IVF untrained empty query batch is rejected");
+}
+
 void test_single_probe_searches_one_list(TestRunner& tests) {
     minifaiss::IndexIVFFlat index(2, 2);
     index.train(
@@ -313,6 +378,7 @@ int main() {
     test_train_rejects_invalid_input(tests);
     test_add_requires_training_and_preserves_size(tests);
     test_search_rejects_invalid_input(tests);
+    test_search_batch_matches_scalar_search(tests);
     test_single_probe_searches_one_list(tests);
     test_full_probe_matches_flat_search(tests);
 

@@ -32,6 +32,10 @@ public:
     void train(std::span<const float> training_vectors,
                std::size_t iterations = 10);
 
+    // Returns lut[subquantizer_id * ksub_ + codeword_id].
+    [[nodiscard]] std::vector<float> inner_product_lut(
+        std::span<const float> query) const;
+
     static float squared_l2_distance(const float* lhs, const float* rhs,
                                      std::size_t length);
 

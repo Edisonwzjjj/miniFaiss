@@ -24,6 +24,9 @@ public:
     [[nodiscard]] std::vector<SearchResult> search(
         std::span<const float> query, std::size_t k,
         std::size_t nprobe = 1) const;
+    [[nodiscard]] std::vector<std::vector<SearchResult>> search_batch(
+        std::span<const float> queries, std::size_t k,
+        std::size_t nprobe = 1) const;
 
 private:
     struct InvertedList {

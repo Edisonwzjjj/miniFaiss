@@ -188,6 +188,67 @@ std::vector<minifaiss::SearchResult> reference_search(
     return results;
 }
 
+void test_search_batch_matches_scalar_search(TestRunner& tests) {
+    minifaiss::IndexFlatIP index(2);
+    index.add(std::array<float, 8>{
+        1.0F,
+        0.0F,
+        0.0F,
+        2.0F,
+        3.0F,
+        1.0F,
+        3.0F,
+        1.0F,
+    });
+
+    const std::array<float, 6> queries = {
+        1.0F, 1.0F, 1.0F, 0.0F, 0.0F, 1.0F,
+    };
+    const auto batch_results = index.search_batch(queries, 3);
+
+    tests.check(batch_results.size() == 3,
+                "batch search returns one result row per query");
+    for (std::size_t query_id = 0; query_id < batch_results.size();
+         ++query_id) {
+        const std::span<const float> query(queries.data() + query_id * 2, 2);
+        const auto scalar_results = index.search(query, 3);
+
+        tests.check(batch_results[query_id].size() == scalar_results.size(),
+                    "batch result count matches scalar search");
+        for (std::size_t rank = 0; rank < scalar_results.size(); ++rank) {
+            tests.check(
+                batch_results[query_id][rank].id == scalar_results[rank].id,
+                "batch result ID matches scalar search");
+            tests.check(batch_results[query_id][rank].score ==
+                            scalar_results[rank].score,
+                        "batch result score matches scalar search");
+        }
+    }
+
+    tests.check(index.search_batch(std::span<const float>{}, 1).empty(),
+                "empty query batch returns no result rows");
+    tests.check_throws_invalid_argument(
+        [&index] {
+            (void)index.search_batch(std::array<float, 3>{1.0F, 2.0F, 3.0F}, 1);
+        },
+        "incomplete packed query batch is rejected");
+    tests.check_throws_invalid_argument(
+        [&index] {
+            (void)index.search_batch(
+                std::array<float, 4>{
+                    1.0F,
+                    0.0F,
+                    std::numeric_limits<float>::quiet_NaN(),
+                    1.0F,
+                },
+                1);
+        },
+        "non-finite later batch query is rejected");
+    tests.check_throws_invalid_argument(
+        [&index] { (void)index.search_batch(std::span<const float>{}, 0); },
+        "zero k rejects an empty query batch");
+}
+
 void test_search_matches_randomized_oracle(TestRunner& tests) {
     constexpr std::array<std::size_t, 4> dimensions = {1, 2, 7, 128};
     constexpr std::array<std::size_t, 4> item_counts = {1, 3, 17, 100};
@@ -257,6 +318,7 @@ int main() {
     test_add_rejects_invalid_input(tests);
     test_search_by_inner_product(tests);
     test_search_boundaries_and_invalid_input(tests);
+    test_search_batch_matches_scalar_search(tests);
     test_search_matches_randomized_oracle(tests);
 
     if (tests.exit_code() == 0) {

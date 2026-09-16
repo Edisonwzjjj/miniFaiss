@@ -19,6 +19,8 @@ public:
 
     [[nodiscard]] std::vector<SearchResult> search(std::span<const float> query,
                                                    std::size_t k) const;
+    [[nodiscard]] std::vector<std::vector<SearchResult>> search_batch(
+        std::span<const float> queries, std::size_t k) const;
 
 private:
     std::size_t dimension_;

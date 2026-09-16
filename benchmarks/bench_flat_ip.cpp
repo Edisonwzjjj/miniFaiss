@@ -58,34 +58,27 @@ int main() {
     minifaiss::IndexFlatIP flat_index(dimension);
     flat_index.add(items);
 
-    std::vector<std::vector<minifaiss::SearchResult>> flat_results;
-    flat_results.reserve(query_count);
+    const auto flat_results = flat_index.search_batch(queries, k);
+    std::size_t ground_truth_result_count = 0;
     std::size_t flat_checksum = 0;
-    for (std::size_t query_id = 0; query_id < query_count; ++query_id) {
-        const float* query_data = queries.data() + query_id * dimension;
-        const std::span<const float> query(query_data, dimension);
-        flat_results.push_back(flat_index.search(query, k));
-
-        for (const minifaiss::SearchResult& result : flat_results.back()) {
+    for (const auto& results : flat_results) {
+        ground_truth_result_count += results.size();
+        for (const minifaiss::SearchResult& result : results) {
             flat_checksum += result.id;
         }
     }
 
-    (void)flat_index.search(std::span<const float>(queries.data(), dimension),
-                            k);
+    (void)flat_index.search_batch(queries, k);
 
-    std::size_t timed_flat_checksum = 0;
     const auto flat_start = std::chrono::steady_clock::now();
-    for (std::size_t query_id = 0; query_id < query_count; ++query_id) {
-        const float* query_data = queries.data() + query_id * dimension;
-        const std::span<const float> query(query_data, dimension);
-        const auto results = flat_index.search(query, k);
-
+    const auto timed_flat_results = flat_index.search_batch(queries, k);
+    const auto flat_end = std::chrono::steady_clock::now();
+    std::size_t timed_flat_checksum = 0;
+    for (const auto& results : timed_flat_results) {
         for (const minifaiss::SearchResult& result : results) {
             timed_flat_checksum += result.id;
         }
     }
-    const auto flat_end = std::chrono::steady_clock::now();
     const std::chrono::duration<double> flat_elapsed = flat_end - flat_start;
     const double flat_queries_per_second =
         static_cast<double>(query_count) / flat_elapsed.count();
@@ -101,40 +94,42 @@ int main() {
               << " Q=" << query_count << " K=" << k << " nlist=" << nlist
               << " train_iterations=" << train_iterations << " seed=" << seed
               << '\n';
-    std::cout << "flat_elapsed_seconds=" << flat_elapsed.count()
-              << " flat_queries_per_second=" << flat_queries_per_second
-              << " flat_checksum=" << timed_flat_checksum << '\n';
-    std::cout << "ground_truth_checksum=" << flat_checksum << '\n';
+    std::cout << "index=flat_ip batch_elapsed_seconds=" << flat_elapsed.count()
+              << " queries_per_second=" << flat_queries_per_second
+              << " checksum=" << timed_flat_checksum << '\n';
+    std::cout << "ground_truth_checksum=" << flat_checksum
+              << " ground_truth_result_count=" << ground_truth_result_count
+              << '\n';
     std::cout << "ivf_train_seconds=" << train_elapsed.count() << '\n';
 
     for (const std::size_t nprobe : nprobe_values) {
-        (void)ivf_index.search(
-            std::span<const float>(queries.data(), dimension), k, nprobe);
+        (void)ivf_index.search_batch(queries, k, nprobe);
+
+        const auto start = std::chrono::steady_clock::now();
+        const auto batch_results = ivf_index.search_batch(queries, k, nprobe);
+        const auto end = std::chrono::steady_clock::now();
 
         std::size_t checksum = 0;
         std::size_t matching_ids = 0;
-        const auto start = std::chrono::steady_clock::now();
-
         for (std::size_t query_id = 0; query_id < query_count; ++query_id) {
-            const float* query_data = queries.data() + query_id * dimension;
-            const std::span<const float> query(query_data, dimension);
-            const auto results = ivf_index.search(query, k, nprobe);
-
+            const auto& results = batch_results[query_id];
             for (const minifaiss::SearchResult& result : results) {
                 checksum += result.id;
             }
             matching_ids += count_matching_ids(flat_results[query_id], results);
         }
 
-        const auto end = std::chrono::steady_clock::now();
         const std::chrono::duration<double> elapsed = end - start;
         const double queries_per_second =
             static_cast<double>(query_count) / elapsed.count();
-        const double recall_at_k = static_cast<double>(matching_ids) /
-                                   static_cast<double>(query_count * k);
+        const double recall_at_k =
+            ground_truth_result_count == 0
+                ? 0.0
+                : static_cast<double>(matching_ids) /
+                      static_cast<double>(ground_truth_result_count);
 
-        std::cout << "nprobe=" << nprobe
-                  << " elapsed_seconds=" << elapsed.count()
+        std::cout << "index=ivf_flat nprobe=" << nprobe
+                  << " batch_elapsed_seconds=" << elapsed.count()
                   << " queries_per_second=" << queries_per_second
                   << " recall_at_k=" << recall_at_k << " checksum=" << checksum
                   << '\n';

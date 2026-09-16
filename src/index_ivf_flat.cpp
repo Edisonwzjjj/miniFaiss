@@ -238,6 +238,41 @@ std::vector<SearchResult> IndexIVFFlat::search(std::span<const float> query,
     return results;
 }
 
+std::vector<std::vector<SearchResult>> IndexIVFFlat::search_batch(
+    std::span<const float> queries, std::size_t k, std::size_t nprobe) const {
+    if (!is_trained()) {
+        throw std::logic_error("cannot search an untrained index");
+    }
+    if (k == 0) {
+        throw std::invalid_argument("k must be greater than zero");
+    }
+    if (nprobe == 0 || nprobe > nlist_) {
+        throw std::invalid_argument("nprobe must be between one and nlist");
+    }
+    if (queries.size() % dimension_ != 0) {
+        throw std::invalid_argument(
+            "query count must be divisible by dimension");
+    }
+    for (const float value : queries) {
+        if (!std::isfinite(value)) {
+            throw std::invalid_argument(
+                "queries must contain only finite values");
+        }
+    }
+
+    const std::size_t query_count = queries.size() / dimension_;
+    std::vector<std::vector<SearchResult>> results;
+    results.reserve(query_count);
+
+    for (std::size_t query_id = 0; query_id < query_count; ++query_id) {
+        const std::span<const float> query(
+            queries.data() + query_id * dimension_, dimension_);
+        results.push_back(search(query, k, nprobe));
+    }
+
+    return results;
+}
+
 std::size_t IndexIVFFlat::dimension() const noexcept { return dimension_; }
 
 std::size_t IndexIVFFlat::size() const noexcept { return size_; }

@@ -177,6 +177,48 @@ void test_encode_ties_choose_lower_codeword(TestRunner& tests) {
     tests.check(codes[0] == 0, "equal distances choose the lower codeword ID");
 }
 
+void test_inner_product_lut(TestRunner& tests) {
+    minifaiss::ProductQuantizer untrained_quantizer(4, 2, 2);
+    tests.check_throws_logic_error(
+        [&untrained_quantizer] {
+            (void)untrained_quantizer.inner_product_lut(
+                std::array<float, 4>{1.0F, 2.0F, 3.0F, 4.0F});
+        },
+        "lookup table without codebooks is rejected");
+
+    minifaiss::ProductQuantizer quantizer(4, 2, 2);
+    set_example_codebooks(quantizer);
+
+    const auto lut = quantizer.inner_product_lut(
+        std::array<float, 4>{1.0F, 2.0F, 3.0F, 4.0F});
+    tests.check(lut.size() == 4, "lookup table has m times ksub entries");
+    tests.check(lut[0] == 0.0F,
+                "first subquantizer codeword zero score is correct");
+    tests.check(lut[1] == 5.0F,
+                "first subquantizer codeword one score is correct");
+    tests.check(lut[2] == 70.0F,
+                "second subquantizer codeword zero score is correct");
+    tests.check(lut[3] == 140.0F,
+                "second subquantizer codeword one score is correct");
+
+    tests.check_throws_invalid_argument(
+        [&quantizer] {
+            (void)quantizer.inner_product_lut(
+                std::array<float, 3>{1.0F, 2.0F, 3.0F});
+        },
+        "short lookup query is rejected");
+    tests.check_throws_invalid_argument(
+        [&quantizer] {
+            (void)quantizer.inner_product_lut(std::array<float, 4>{
+                1.0F,
+                2.0F,
+                std::numeric_limits<float>::quiet_NaN(),
+                4.0F,
+            });
+        },
+        "non-finite lookup query is rejected");
+}
+
 void test_train_learns_independent_codebooks(TestRunner& tests) {
     const std::array<float, 16> training_vectors = {
         0.0F, 0.0F, 10.0F, 10.0F, 8.0F, 8.0F,  20.0F, 20.0F,
@@ -317,6 +359,7 @@ int main() {
     test_codebook_and_encode_decode(tests);
     test_encode_decode_reject_invalid_input(tests);
     test_encode_ties_choose_lower_codeword(tests);
+    test_inner_product_lut(tests);
     test_train_learns_independent_codebooks(tests);
     test_train_is_deterministic(tests);
     test_train_rejects_invalid_input_and_preserves_codebooks(tests);

@@ -248,6 +248,47 @@ void ProductQuantizer::train(std::span<const float> training_vectors,
     codebooks_ = std::move(new_codebooks);
 }
 
+std::vector<float> ProductQuantizer::inner_product_lut(
+    std::span<const float> query) const {
+    if (!has_codebooks()) {
+        throw std::logic_error(
+            "codebooks must be set before building a lookup table");
+    }
+    if (query.size() != dimension_) {
+        throw std::invalid_argument(
+            "query dimension must match ProductQuantizer dimension");
+    }
+    for (const float value : query) {
+        if (!std::isfinite(value)) {
+            throw std::invalid_argument(
+                "query must contain only finite values");
+        }
+    }
+
+    std::vector<float> lut(m_ * ksub_, 0.0F);
+    for (std::size_t subquantizer_id = 0; subquantizer_id < m_;
+         ++subquantizer_id) {
+        const float* query_subvector =
+            query.data() + subquantizer_id * subdimension_;
+
+        for (std::size_t codeword_id = 0; codeword_id < ksub_; ++codeword_id) {
+            const float* codeword =
+                codebooks_.data() +
+                (subquantizer_id * ksub_ + codeword_id) * subdimension_;
+            float score = 0.0F;
+
+            for (std::size_t value_id = 0; value_id < subdimension_;
+                 ++value_id) {
+                score += query_subvector[value_id] * codeword[value_id];
+            }
+
+            lut[subquantizer_id * ksub_ + codeword_id] = score;
+        }
+    }
+
+    return lut;
+}
+
 float ProductQuantizer::squared_l2_distance(const float* lhs, const float* rhs,
                                             std::size_t length) {
     float distance = 0.0F;

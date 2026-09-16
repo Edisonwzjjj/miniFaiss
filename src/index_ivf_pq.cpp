@@ -1,6 +1,8 @@
 #include "minifaiss/index_ivf_pq.hpp"
 
+#include <algorithm>
 #include <cmath>
+#include <queue>
 #include <stdexcept>
 #include <utility>
 #include <vector>
@@ -34,6 +36,24 @@ std::size_t select_best_centroid(const float* vector,
 
     return best_list_id;
 }
+
+struct CentroidScore {
+    std::size_t list_id;
+    float score;
+};
+
+bool is_better(const SearchResult& lhs, const SearchResult& rhs) {
+    if (lhs.score != rhs.score) {
+        return lhs.score > rhs.score;
+    }
+    return lhs.id < rhs.id;
+}
+
+struct WorseResultAtTop {
+    bool operator()(const SearchResult& lhs, const SearchResult& rhs) const {
+        return is_better(lhs, rhs);
+    }
+};
 
 }  // namespace
 
@@ -228,15 +248,141 @@ void IndexIVFPQ::add(std::span<const float> vectors) {
 std::vector<SearchResult> IndexIVFPQ::search(std::span<const float> query,
                                              std::size_t k,
                                              std::size_t nprobe) const {
-    (void)query;
-    (void)k;
-    (void)nprobe;
-    throw std::logic_error("IndexIVFPQ::search is not implemented");
+    if (!is_trained()) {
+        throw std::logic_error("cannot search an untrained index");
+    }
+    if (query.size() != dimension_) {
+        throw std::invalid_argument(
+            "query dimension must match index dimension");
+    }
+    if (k == 0) {
+        throw std::invalid_argument("k must be greater than zero");
+    }
+    if (nprobe == 0 || nprobe > nlist_) {
+        throw std::invalid_argument("nprobe must be between one and nlist");
+    }
+
+    for (const float value : query) {
+        if (!std::isfinite(value)) {
+            throw std::invalid_argument(
+                "query must contain only finite values");
+        }
+    }
+
+    std::vector<CentroidScore> centroid_scores;
+    centroid_scores.reserve(nlist_);
+    for (std::size_t list_id = 0; list_id < nlist_; ++list_id) {
+        const float* centroid = centroids_.data() + list_id * dimension_;
+        centroid_scores.push_back(
+            {list_id, inner_product(query.data(), centroid, dimension_)});
+    }
+
+    std::sort(centroid_scores.begin(), centroid_scores.end(),
+              [](const CentroidScore& lhs, const CentroidScore& rhs) {
+                  if (lhs.score != rhs.score) {
+                      return lhs.score > rhs.score;
+                  }
+                  return lhs.list_id < rhs.list_id;
+              });
+
+    const std::vector<float> lut = quantizer_.inner_product_lut(query);
+    std::priority_queue<SearchResult, std::vector<SearchResult>,
+                        WorseResultAtTop>
+        heap;
+
+    for (std::size_t probe_id = 0; probe_id < nprobe; ++probe_id) {
+        const CentroidScore centroid_score = centroid_scores[probe_id];
+        const InvertedList& list = lists_[centroid_score.list_id];
+
+        for (std::size_t local_id = 0; local_id < list.ids.size(); ++local_id) {
+            float score = centroid_score.score;
+            const std::size_t code_offset = local_id * m();
+
+            for (std::size_t subquantizer_id = 0; subquantizer_id < m();
+                 ++subquantizer_id) {
+                const std::size_t code =
+                    list.codes[code_offset + subquantizer_id];
+                score += lut[subquantizer_id * ksub() + code];
+            }
+
+            const SearchResult candidate{list.ids[local_id], score};
+            if (heap.size() < k) {
+                heap.push(candidate);
+            } else if (is_better(candidate, heap.top())) {
+                heap.pop();
+                heap.push(candidate);
+            }
+        }
+    }
+
+    std::vector<SearchResult> results;
+    results.reserve(std::min(k, size_));
+    while (!heap.empty()) {
+        results.push_back(heap.top());
+        heap.pop();
+    }
+
+    std::sort(results.begin(), results.end(), is_better);
+    return results;
+}
+
+std::vector<std::vector<SearchResult>> IndexIVFPQ::search_batch(
+    std::span<const float> queries, std::size_t k, std::size_t nprobe) const {
+    if (!is_trained()) {
+        throw std::logic_error("cannot search an untrained index");
+    }
+    if (k == 0) {
+        throw std::invalid_argument("k must be greater than zero");
+    }
+    if (nprobe == 0 || nprobe > nlist_) {
+        throw std::invalid_argument("nprobe must be between one and nlist");
+    }
+    if (queries.size() % dimension_ != 0) {
+        throw std::invalid_argument(
+            "query count must be divisible by dimension");
+    }
+    for (const float value : queries) {
+        if (!std::isfinite(value)) {
+            throw std::invalid_argument(
+                "queries must contain only finite values");
+        }
+    }
+
+    const std::size_t query_count = queries.size() / dimension_;
+    std::vector<std::vector<SearchResult>> results;
+    results.reserve(query_count);
+
+    for (std::size_t query_id = 0; query_id < query_count; ++query_id) {
+        const std::span<const float> query(
+            queries.data() + query_id * dimension_, dimension_);
+        results.push_back(search(query, k, nprobe));
+    }
+
+    return results;
 }
 
 std::vector<float> IndexIVFPQ::reconstruct(std::size_t id) const {
-    (void)id;
-    throw std::logic_error("IndexIVFPQ::reconstruct is not implemented");
+    if (!is_trained()) {
+        throw std::logic_error("cannot reconstruct from an untrained index");
+    }
+    if (id >= size_) {
+        throw std::out_of_range("vector ID is outside the index");
+    }
+
+    const Location location = locations_[id];
+    const InvertedList& list = lists_[location.list_id];
+    const std::size_t code_offset = location.local_id * m();
+    const std::span<const std::uint8_t> codes(list.codes.data() + code_offset,
+                                              m());
+
+    std::vector<float> reconstructed = quantizer_.decode(codes);
+    const float* centroid = centroids_.data() + location.list_id * dimension_;
+
+    for (std::size_t value_id = 0; value_id < dimension_; ++value_id) {
+        reconstructed[value_id] += centroid[value_id];
+    }
+
+    return reconstructed;
 }
 
 }  // namespace minifaiss
