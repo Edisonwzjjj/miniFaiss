@@ -5,14 +5,9 @@
 
 namespace minifaiss {
 
-ProductQuantizer::ProductQuantizer(
-    std::size_t dimension,
-    std::size_t m,
-    std::size_t ksub)
-    : dimension_(dimension),
-      m_(m),
-      ksub_(ksub),
-      subdimension_(0) {
+ProductQuantizer::ProductQuantizer(std::size_t dimension, std::size_t m,
+                                   std::size_t ksub)
+    : dimension_(dimension), m_(m), ksub_(ksub), subdimension_(0) {
     if (dimension_ == 0) {
         throw std::invalid_argument("dimension must be greater than zero");
     }
@@ -29,17 +24,11 @@ ProductQuantizer::ProductQuantizer(
     subdimension_ = dimension_ / m_;
 }
 
-std::size_t ProductQuantizer::dimension() const noexcept {
-    return dimension_;
-}
+std::size_t ProductQuantizer::dimension() const noexcept { return dimension_; }
 
-std::size_t ProductQuantizer::m() const noexcept {
-    return m_;
-}
+std::size_t ProductQuantizer::m() const noexcept { return m_; }
 
-std::size_t ProductQuantizer::ksub() const noexcept {
-    return ksub_;
-}
+std::size_t ProductQuantizer::ksub() const noexcept { return ksub_; }
 
 std::size_t ProductQuantizer::subdimension() const noexcept {
     return subdimension_;
@@ -50,8 +39,7 @@ bool ProductQuantizer::has_codebooks() const noexcept {
 }
 
 void ProductQuantizer::set_codebooks(std::span<const float> codebooks) {
-    const std::size_t expected_size =
-        m_ * ksub_ * subdimension_;
+    const std::size_t expected_size = m_ * ksub_ * subdimension_;
 
     if (codebooks.size() != expected_size) {
         throw std::invalid_argument("codebook size is invalid");
@@ -80,7 +68,8 @@ std::vector<std::uint8_t> ProductQuantizer::encode(
 
     for (const float value : vector) {
         if (!std::isfinite(value)) {
-            throw std::invalid_argument("vector must contain only finite values");
+            throw std::invalid_argument(
+                "vector must contain only finite values");
         }
     }
 
@@ -96,8 +85,7 @@ std::vector<std::uint8_t> ProductQuantizer::encode(
         float best_distance =
             squared_l2_distance(subvector, first_codeword, subdimension_);
 
-        for (std::size_t codeword_id = 1; codeword_id < ksub_;
-             ++codeword_id) {
+        for (std::size_t codeword_id = 1; codeword_id < ksub_; ++codeword_id) {
             const float* codeword =
                 codebooks_.data() +
                 (subquantizer_id * ksub_ + codeword_id) * subdimension_;
@@ -134,8 +122,7 @@ std::vector<float> ProductQuantizer::decode(
             throw std::invalid_argument("codeword ID is outside the codebook");
         }
 
-        float* subvector =
-            vector.data() + subquantizer_id * subdimension_;
+        float* subvector = vector.data() + subquantizer_id * subdimension_;
         const float* codeword =
             codebooks_.data() +
             (subquantizer_id * ksub_ + codeword_id) * subdimension_;
@@ -148,10 +135,121 @@ std::vector<float> ProductQuantizer::decode(
     return vector;
 }
 
-float ProductQuantizer::squared_l2_distance(
-    const float* lhs,
-    const float* rhs,
-    std::size_t length) {
+void ProductQuantizer::train(std::span<const float> training_vectors,
+                             std::size_t iterations) {
+    if (iterations == 0) {
+        throw std::invalid_argument("iterations must be greater than zero");
+    }
+
+    if (training_vectors.empty()) {
+        throw std::invalid_argument("training vectors must not be empty");
+    }
+
+    if (training_vectors.size() % dimension_ != 0) {
+        throw std::invalid_argument(
+            "training vector count must be divisible by dimension");
+    }
+
+    const std::size_t training_vector_count =
+        training_vectors.size() / dimension_;
+    if (training_vector_count < ksub_) {
+        throw std::invalid_argument(
+            "training vector count must be at least ksub");
+    }
+
+    for (const float value : training_vectors) {
+        if (!std::isfinite(value)) {
+            throw std::invalid_argument(
+                "training vectors must contain only finite values");
+        }
+    }
+
+    std::vector<float> new_codebooks(m_ * ksub_ * subdimension_);
+
+    for (std::size_t subquantizer_id = 0; subquantizer_id < m_;
+         ++subquantizer_id) {
+        for (std::size_t initial_vector_id = 0; initial_vector_id < ksub_;
+             ++initial_vector_id) {
+            const float* source = training_vectors.data() +
+                                  initial_vector_id * dimension_ +
+                                  subquantizer_id * subdimension_;
+            float* destination =
+                new_codebooks.data() +
+                (subquantizer_id * ksub_ + initial_vector_id) * subdimension_;
+
+            for (std::size_t value_id = 0; value_id < subdimension_;
+                 ++value_id) {
+                destination[value_id] = source[value_id];
+            }
+        }
+    }
+
+    for (std::size_t subquantizer_id = 0; subquantizer_id < m_;
+         ++subquantizer_id) {
+        for (std::size_t iteration = 0; iteration < iterations; ++iteration) {
+            std::vector<float> sums(ksub_ * subdimension_, 0.0F);
+            std::vector<std::size_t> counts(ksub_, 0);
+
+            for (std::size_t vector_id = 0; vector_id < training_vector_count;
+                 ++vector_id) {
+                const float* subvector = training_vectors.data() +
+                                         vector_id * dimension_ +
+                                         subquantizer_id * subdimension_;
+                const float* first_codeword =
+                    new_codebooks.data() +
+                    subquantizer_id * ksub_ * subdimension_;
+
+                std::size_t best_codeword_id = 0;
+                float best_distance = squared_l2_distance(
+                    subvector, first_codeword, subdimension_);
+
+                for (std::size_t codeword_id = 1; codeword_id < ksub_;
+                     ++codeword_id) {
+                    const float* codeword =
+                        new_codebooks.data() +
+                        (subquantizer_id * ksub_ + codeword_id) * subdimension_;
+                    const float distance =
+                        squared_l2_distance(subvector, codeword, subdimension_);
+
+                    if (distance < best_distance) {
+                        best_distance = distance;
+                        best_codeword_id = codeword_id;
+                    }
+                }
+
+                ++counts[best_codeword_id];
+                for (std::size_t value_id = 0; value_id < subdimension_;
+                     ++value_id) {
+                    sums[best_codeword_id * subdimension_ + value_id] +=
+                        subvector[value_id];
+                }
+            }
+
+            for (std::size_t codeword_id = 0; codeword_id < ksub_;
+                 ++codeword_id) {
+                if (counts[codeword_id] == 0) {
+                    continue;
+                }
+
+                const float count = static_cast<float>(counts[codeword_id]);
+                float* codeword =
+                    new_codebooks.data() +
+                    (subquantizer_id * ksub_ + codeword_id) * subdimension_;
+
+                for (std::size_t value_id = 0; value_id < subdimension_;
+                     ++value_id) {
+                    codeword[value_id] =
+                        sums[codeword_id * subdimension_ + value_id] / count;
+                }
+            }
+        }
+    }
+
+    codebooks_ = std::move(new_codebooks);
+}
+
+float ProductQuantizer::squared_l2_distance(const float* lhs, const float* rhs,
+                                            std::size_t length) {
     float distance = 0.0F;
     for (std::size_t value_id = 0; value_id < length; ++value_id) {
         const float difference = lhs[value_id] - rhs[value_id];

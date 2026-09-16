@@ -22,7 +22,8 @@ public:
     }
 
     template <typename Function>
-    void check_throws_invalid_argument(Function&& function, const char* message) {
+    void check_throws_invalid_argument(Function&& function,
+                                       const char* message) {
         try {
             function();
             check(false, message);
@@ -30,9 +31,7 @@ public:
         }
     }
 
-    [[nodiscard]] int exit_code() const {
-        return failures_ == 0 ? 0 : 1;
-    }
+    [[nodiscard]] int exit_code() const { return failures_ == 0 ? 0 : 1; }
 
 private:
     int failures_ = 0;
@@ -52,11 +51,11 @@ void test_add_vectors(TestRunner& tests) {
     minifaiss::IndexFlatIP index(3);
 
     const std::array<float, 6> first_batch = {
-        1.0F, 2.0F, 3.0F,
-        4.0F, 5.0F, 6.0F,
+        1.0F, 2.0F, 3.0F, 4.0F, 5.0F, 6.0F,
     };
     index.add(first_batch);
-    tests.check(index.size() == 2, "adding two 3D vectors increases size by two");
+    tests.check(index.size() == 2,
+                "adding two 3D vectors increases size by two");
 
     const std::array<float, 3> second_batch = {7.0F, 8.0F, 9.0F};
     index.add(second_batch);
@@ -84,7 +83,8 @@ void test_add_rejects_invalid_input(TestRunner& tests) {
             });
         },
         "NaN values are rejected");
-    tests.check(index.size() == 1, "non-finite batch does not partially append");
+    tests.check(index.size() == 1,
+                "non-finite batch does not partially append");
 
     tests.check_throws_invalid_argument(
         [&index] {
@@ -101,10 +101,14 @@ void test_add_rejects_invalid_input(TestRunner& tests) {
 void test_search_by_inner_product(TestRunner& tests) {
     minifaiss::IndexFlatIP index(2);
     index.add(std::array<float, 8>{
-        1.0F, 0.0F,
-        0.0F, 2.0F,
-        3.0F, 1.0F,
-        3.0F, 1.0F,
+        1.0F,
+        0.0F,
+        0.0F,
+        2.0F,
+        3.0F,
+        1.0F,
+        3.0F,
+        1.0F,
     });
 
     const auto results = index.search(std::array<float, 2>{1.0F, 1.0F}, 3);
@@ -112,7 +116,8 @@ void test_search_by_inner_product(TestRunner& tests) {
     tests.check(results.size() == 3, "search returns k results");
     tests.check(results[0].id == 2, "highest score ranks first");
     tests.check(results[0].score == 4.0F, "highest score is correct");
-    tests.check(results[1].id == 3, "equal scores use ascending ID as tie-breaker");
+    tests.check(results[1].id == 3,
+                "equal scores use ascending ID as tie-breaker");
     tests.check(results[1].score == 4.0F, "tied score is correct");
     tests.check(results[2].id == 1, "third-best result is correct");
     tests.check(results[2].score == 2.0F, "third-best score is correct");
@@ -120,22 +125,23 @@ void test_search_by_inner_product(TestRunner& tests) {
 
 void test_search_boundaries_and_invalid_input(TestRunner& tests) {
     minifaiss::IndexFlatIP empty_index(2);
-    const auto empty_results = empty_index.search(std::array<float, 2>{1.0F, 2.0F}, 1);
+    const auto empty_results =
+        empty_index.search(std::array<float, 2>{1.0F, 2.0F}, 1);
     tests.check(empty_results.empty(), "empty index search returns no results");
 
     minifaiss::IndexFlatIP index(2);
     index.add(std::array<float, 4>{1.0F, 0.0F, 0.0F, 1.0F});
 
     const auto all_results = index.search(std::array<float, 2>{1.0F, 1.0F}, 5);
-    tests.check(all_results.size() == 2, "k larger than index size returns all results");
+    tests.check(all_results.size() == 2,
+                "k larger than index size returns all results");
 
     tests.check_throws_invalid_argument(
         [&index] { (void)index.search(std::array<float, 1>{1.0F}, 1); },
         "short query is rejected");
     tests.check_throws_invalid_argument(
         [&index] {
-            (void)index.search(
-                std::array<float, 4>{1.0F, 2.0F, 3.0F, 4.0F}, 1);
+            (void)index.search(std::array<float, 4>{1.0F, 2.0F, 3.0F, 4.0F}, 1);
         },
         "long query is rejected");
     tests.check_throws_invalid_argument(
@@ -143,10 +149,12 @@ void test_search_boundaries_and_invalid_input(TestRunner& tests) {
         "zero k is rejected");
     tests.check_throws_invalid_argument(
         [&index] {
-            (void)index.search(std::array<float, 2>{
-                1.0F,
-                std::numeric_limits<float>::quiet_NaN(),
-            }, 1);
+            (void)index.search(
+                std::array<float, 2>{
+                    1.0F,
+                    std::numeric_limits<float>::quiet_NaN(),
+                },
+                1);
         },
         "non-finite query is rejected");
 }
@@ -161,10 +169,8 @@ bool is_better(const minifaiss::SearchResult& lhs,
 }
 
 std::vector<minifaiss::SearchResult> reference_search(
-    std::span<const float> query,
-    std::span<const float> items,
-    std::size_t dimension,
-    std::size_t k) {
+    std::span<const float> query, std::span<const float> items,
+    std::size_t dimension, std::size_t k) {
     std::vector<minifaiss::SearchResult> results;
     const std::size_t item_count = items.size() / dimension;
     results.reserve(item_count);
@@ -215,19 +221,25 @@ void test_search_matches_randomized_oracle(TestRunner& tests) {
 
                 for (const std::size_t k : k_values) {
                     const auto actual = index.search(query, k);
-                    const auto expected = reference_search(query, items, dimension, k);
+                    const auto expected =
+                        reference_search(query, items, dimension, k);
 
-                    tests.check(actual.size() == expected.size(),
-                                "randomized search result count matches reference");
+                    tests.check(
+                        actual.size() == expected.size(),
+                        "randomized search result count matches reference");
                     if (actual.size() != expected.size()) {
                         continue;
                     }
 
-                    for (std::size_t result_id = 0; result_id < actual.size(); ++result_id) {
-                        tests.check(actual[result_id].id == expected[result_id].id,
-                                    "randomized search ID matches reference");
-                        tests.check(actual[result_id].score == expected[result_id].score,
-                                    "randomized search score matches reference");
+                    for (std::size_t result_id = 0; result_id < actual.size();
+                         ++result_id) {
+                        tests.check(
+                            actual[result_id].id == expected[result_id].id,
+                            "randomized search ID matches reference");
+                        tests.check(
+                            actual[result_id].score ==
+                                expected[result_id].score,
+                            "randomized search score matches reference");
                     }
                 }
             }

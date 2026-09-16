@@ -1,11 +1,10 @@
 #pragma once
 
-#include "search_result.hpp"
-
 #include <cstddef>
 #include <span>
 #include <vector>
 
+#include "search_result.hpp"
 
 namespace minifaiss {
 
@@ -18,9 +17,8 @@ public:
 
     void add(std::span<const float> vectors);
 
-    [[nodiscard]] std::vector<SearchResult> search(
-        std::span<const float> query,
-        std::size_t k) const;
+    [[nodiscard]] std::vector<SearchResult> search(std::span<const float> query,
+                                                   std::size_t k) const;
 
 private:
     std::size_t dimension_;

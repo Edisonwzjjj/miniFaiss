@@ -4,12 +4,9 @@
 
 using namespace std;
 
-
-void solve() {
-  
-}
+void solve() {}
 
 int main() {
-  solve();
-  return 0;
+    solve();
+    return 0;
 }

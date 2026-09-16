@@ -1,10 +1,11 @@
-#include "minifaiss/index_flat_ip.hpp"
 #include "minifaiss/index_ivf_flat.hpp"
 
 #include <array>
 #include <iostream>
 #include <limits>
 #include <stdexcept>
+
+#include "minifaiss/index_flat_ip.hpp"
 
 namespace {
 
@@ -18,7 +19,8 @@ public:
     }
 
     template <typename Function>
-    void check_throws_invalid_argument(Function&& function, const char* message) {
+    void check_throws_invalid_argument(Function&& function,
+                                       const char* message) {
         try {
             function();
             check(false, message);
@@ -35,9 +37,7 @@ public:
         }
     }
 
-    [[nodiscard]] int exit_code() const {
-        return failures_ == 0 ? 0 : 1;
-    }
+    [[nodiscard]] int exit_code() const { return failures_ == 0 ? 0 : 1; }
 
 private:
     int failures_ = 0;
@@ -57,18 +57,23 @@ void test_constructor_rejects_invalid_arguments(TestRunner& tests) {
         [] { minifaiss::IndexIVFFlat index(0, 1); },
         "zero dimension is rejected");
     tests.check_throws_invalid_argument(
-        [] { minifaiss::IndexIVFFlat index(1, 0); },
-        "zero nlist is rejected");
+        [] { minifaiss::IndexIVFFlat index(1, 0); }, "zero nlist is rejected");
 }
 
 void test_train_sets_trained_state(TestRunner& tests) {
     minifaiss::IndexIVFFlat index(2, 2);
-    index.train(std::array<float, 8>{
-        1.0F, 0.0F,
-        0.0F, 1.0F,
-        0.8F, 0.2F,
-        0.1F, 0.9F,
-    }, 2);
+    index.train(
+        std::array<float, 8>{
+            1.0F,
+            0.0F,
+            0.0F,
+            1.0F,
+            0.8F,
+            0.2F,
+            0.1F,
+            0.9F,
+        },
+        2);
 
     tests.check(index.is_trained(), "valid training marks the index trained");
     tests.check(index.size() == 0, "training does not index training vectors");
@@ -77,10 +82,10 @@ void test_train_sets_trained_state(TestRunner& tests) {
 void test_train_rejects_invalid_input(TestRunner& tests) {
     minifaiss::IndexIVFFlat index(2, 2);
 
-    tests.check_throws_invalid_argument(
-        [&index] { index.train({}, 1); },
-        "empty training data is rejected");
-    tests.check(!index.is_trained(), "failed initial training keeps index untrained");
+    tests.check_throws_invalid_argument([&index] { index.train({}, 1); },
+                                        "empty training data is rejected");
+    tests.check(!index.is_trained(),
+                "failed initial training keeps index untrained");
 
     tests.check_throws_invalid_argument(
         [&index] { index.train(std::array<float, 3>{1.0F, 2.0F, 3.0F}, 1); },
@@ -95,22 +100,26 @@ void test_train_rejects_invalid_input(TestRunner& tests) {
         "zero training iterations are rejected");
     tests.check_throws_invalid_argument(
         [&index] {
-            index.train(std::array<float, 4>{
-                1.0F,
-                0.0F,
-                std::numeric_limits<float>::quiet_NaN(),
-                1.0F,
-            }, 1);
+            index.train(
+                std::array<float, 4>{
+                    1.0F,
+                    0.0F,
+                    std::numeric_limits<float>::quiet_NaN(),
+                    1.0F,
+                },
+                1);
         },
         "non-finite training value is rejected");
 
     index.train(std::array<float, 4>{1.0F, 0.0F, 0.0F, 1.0F}, 1);
-    tests.check(index.is_trained(), "valid training succeeds after rejected inputs");
+    tests.check(index.is_trained(),
+                "valid training succeeds after rejected inputs");
 
     tests.check_throws_invalid_argument(
         [&index] { index.train(std::array<float, 3>{1.0F, 2.0F, 3.0F}, 1); },
         "failed retraining rejects malformed input");
-    tests.check(index.is_trained(), "failed retraining preserves trained state");
+    tests.check(index.is_trained(),
+                "failed retraining preserves trained state");
     tests.check(index.size() == 0, "training validation never adds vectors");
 }
 
@@ -161,51 +170,63 @@ void test_search_rejects_invalid_input(TestRunner& tests) {
 
     const auto empty_results =
         index.search(std::array<float, 2>{1.0F, 0.0F}, 1, 1);
-    tests.check(empty_results.empty(), "trained empty index returns no results");
+    tests.check(empty_results.empty(),
+                "trained empty index returns no results");
 
     tests.check_throws_invalid_argument(
         [&index] { (void)index.search(std::array<float, 1>{1.0F}, 1); },
         "short query is rejected");
     tests.check_throws_invalid_argument(
         [&index] {
-            (void)index.search(
-                std::array<float, 4>{1.0F, 0.0F, 1.0F, 0.0F}, 1);
+            (void)index.search(std::array<float, 4>{1.0F, 0.0F, 1.0F, 0.0F}, 1);
         },
         "long query is rejected");
     tests.check_throws_invalid_argument(
         [&index] {
-            (void)index.search(std::array<float, 2>{
-                1.0F,
-                std::numeric_limits<float>::quiet_NaN(),
-            }, 1);
+            (void)index.search(
+                std::array<float, 2>{
+                    1.0F,
+                    std::numeric_limits<float>::quiet_NaN(),
+                },
+                1);
         },
         "non-finite query is rejected");
     tests.check_throws_invalid_argument(
         [&index] { (void)index.search(std::array<float, 2>{1.0F, 0.0F}, 0); },
         "zero k is rejected");
     tests.check_throws_invalid_argument(
-        [&index] { (void)index.search(std::array<float, 2>{1.0F, 0.0F}, 1, 0); },
+        [&index] {
+            (void)index.search(std::array<float, 2>{1.0F, 0.0F}, 1, 0);
+        },
         "zero nprobe is rejected");
     tests.check_throws_invalid_argument(
-        [&index] { (void)index.search(std::array<float, 2>{1.0F, 0.0F}, 1, 3); },
+        [&index] {
+            (void)index.search(std::array<float, 2>{1.0F, 0.0F}, 1, 3);
+        },
         "nprobe larger than nlist is rejected");
 }
 
 void test_single_probe_searches_one_list(TestRunner& tests) {
     minifaiss::IndexIVFFlat index(2, 2);
-    index.train(std::array<float, 4>{
-        1.0F, 0.0F,
-        0.0F, 1.0F,
-    }, 1);
+    index.train(
+        std::array<float, 4>{
+            1.0F,
+            0.0F,
+            0.0F,
+            1.0F,
+        },
+        1);
 
     index.add(std::array<float, 6>{
-        0.9F, 0.1F,
-        0.8F, 0.2F,
-        0.1F, 0.9F,
+        0.9F,
+        0.1F,
+        0.8F,
+        0.2F,
+        0.1F,
+        0.9F,
     });
 
-    const auto results =
-        index.search(std::array<float, 2>{1.0F, 0.0F}, 10, 1);
+    const auto results = index.search(std::array<float, 2>{1.0F, 0.0F}, 10, 1);
 
     tests.check(results.size() == 2,
                 "single probe returns only candidates in selected list");
@@ -224,18 +245,10 @@ void test_full_probe_matches_flat_search(TestRunner& tests) {
     constexpr std::size_t nlist = 2;
 
     const std::array<float, 8> training_vectors = {
-        1.0F, 0.0F,
-        0.0F, 1.0F,
-        0.8F, 0.2F,
-        0.1F, 0.9F,
+        1.0F, 0.0F, 0.0F, 1.0F, 0.8F, 0.2F, 0.1F, 0.9F,
     };
     const std::array<float, 12> item_vectors = {
-        0.9F, 0.1F,
-        0.2F, 0.8F,
-        1.0F, 0.3F,
-        0.1F, 1.0F,
-        -0.8F, 0.2F,
-        0.4F, 0.4F,
+        0.9F, 0.1F, 0.2F, 0.8F, 1.0F, 0.3F, 0.1F, 1.0F, -0.8F, 0.2F, 0.4F, 0.4F,
     };
     const std::array<std::array<float, 2>, 3> queries = {{
         {1.0F, 0.2F},
@@ -250,14 +263,20 @@ void test_full_probe_matches_flat_search(TestRunner& tests) {
     minifaiss::IndexIVFFlat ivf_index(dimension, nlist);
     ivf_index.train(training_vectors, 2);
     ivf_index.add(std::array<float, 6>{
-        0.9F, 0.1F,
-        0.2F, 0.8F,
-        1.0F, 0.3F,
+        0.9F,
+        0.1F,
+        0.2F,
+        0.8F,
+        1.0F,
+        0.3F,
     });
     ivf_index.add(std::array<float, 6>{
-        0.1F, 1.0F,
-        -0.8F, 0.2F,
-        0.4F, 0.4F,
+        0.1F,
+        1.0F,
+        -0.8F,
+        0.2F,
+        0.4F,
+        0.4F,
     });
 
     for (const auto& query : queries) {
@@ -271,11 +290,13 @@ void test_full_probe_matches_flat_search(TestRunner& tests) {
                 continue;
             }
 
-            for (std::size_t result_id = 0; result_id < actual.size(); ++result_id) {
+            for (std::size_t result_id = 0; result_id < actual.size();
+                 ++result_id) {
                 tests.check(actual[result_id].id == expected[result_id].id,
                             "full-probe IVF ID matches Flat");
-                tests.check(actual[result_id].score == expected[result_id].score,
-                            "full-probe IVF score matches Flat");
+                tests.check(
+                    actual[result_id].score == expected[result_id].score,
+                    "full-probe IVF score matches Flat");
             }
         }
     }

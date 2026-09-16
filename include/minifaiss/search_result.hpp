@@ -9,4 +9,4 @@ struct SearchResult {
     float score;
 };
 
-} // namespace minifaiss
+}  // namespace minifaiss

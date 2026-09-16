@@ -1,6 +1,3 @@
-#include "minifaiss/index_flat_ip.hpp"
-#include "minifaiss/index_ivf_flat.hpp"
-
 #include <array>
 #include <chrono>
 #include <cstddef>
@@ -8,6 +5,9 @@
 #include <random>
 #include <span>
 #include <vector>
+
+#include "minifaiss/index_flat_ip.hpp"
+#include "minifaiss/index_ivf_flat.hpp"
 
 namespace {
 
@@ -71,8 +71,8 @@ int main() {
         }
     }
 
-    (void)flat_index.search(
-        std::span<const float>(queries.data(), dimension), k);
+    (void)flat_index.search(std::span<const float>(queries.data(), dimension),
+                            k);
 
     std::size_t timed_flat_checksum = 0;
     const auto flat_start = std::chrono::steady_clock::now();
@@ -98,10 +98,9 @@ int main() {
     const std::chrono::duration<double> train_elapsed = train_end - train_start;
 
     std::cout << "N=" << item_count << " D=" << dimension
-              << " Q=" << query_count << " K=" << k
-              << " nlist=" << nlist
-              << " train_iterations=" << train_iterations
-              << " seed=" << seed << '\n';
+              << " Q=" << query_count << " K=" << k << " nlist=" << nlist
+              << " train_iterations=" << train_iterations << " seed=" << seed
+              << '\n';
     std::cout << "flat_elapsed_seconds=" << flat_elapsed.count()
               << " flat_queries_per_second=" << flat_queries_per_second
               << " flat_checksum=" << timed_flat_checksum << '\n';
@@ -131,15 +130,14 @@ int main() {
         const std::chrono::duration<double> elapsed = end - start;
         const double queries_per_second =
             static_cast<double>(query_count) / elapsed.count();
-        const double recall_at_k =
-            static_cast<double>(matching_ids) /
-            static_cast<double>(query_count * k);
+        const double recall_at_k = static_cast<double>(matching_ids) /
+                                   static_cast<double>(query_count * k);
 
         std::cout << "nprobe=" << nprobe
                   << " elapsed_seconds=" << elapsed.count()
                   << " queries_per_second=" << queries_per_second
-                  << " recall_at_k=" << recall_at_k
-                  << " checksum=" << checksum << '\n';
+                  << " recall_at_k=" << recall_at_k << " checksum=" << checksum
+                  << '\n';
     }
 
     return 0;

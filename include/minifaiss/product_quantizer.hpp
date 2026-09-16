@@ -9,10 +9,7 @@ namespace minifaiss {
 
 class ProductQuantizer {
 public:
-    ProductQuantizer(
-        std::size_t dimension,
-        std::size_t m,
-        std::size_t ksub);
+    ProductQuantizer(std::size_t dimension, std::size_t m, std::size_t ksub);
 
     [[nodiscard]] std::size_t dimension() const noexcept;
     [[nodiscard]] std::size_t m() const noexcept;
@@ -31,10 +28,12 @@ public:
     [[nodiscard]] std::vector<float> decode(
         std::span<const std::uint8_t> codes) const;
 
-    static float squared_l2_distance(
-        const float* lhs,
-        const float* rhs,
-        std::size_t length);
+    // Learns m independent ksub-codeword L2 codebooks from row-major vectors.
+    void train(std::span<const float> training_vectors,
+               std::size_t iterations = 10);
+
+    static float squared_l2_distance(const float* lhs, const float* rhs,
+                                     std::size_t length);
 
 private:
     std::size_t dimension_;
