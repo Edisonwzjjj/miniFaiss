@@ -8,6 +8,9 @@
 #include <stdexcept>
 #include <vector>
 
+#include "minifaiss/detail/dot_product.hpp"
+#include "parallel_for.hpp"
+
 namespace minifaiss {
 
 IndexFlatIP::IndexFlatIP(std::size_t dimension) : dimension_(dimension) {
@@ -56,15 +59,6 @@ struct WorseAtTop {
     }
 };
 
-float inner_product(std::span<const float> query, const float* vector,
-                    std::size_t dimension) {
-    float ip = 0.0F;
-    for (std::size_t idx = 0; idx < dimension; ++idx) {
-        ip += query[idx] * vector[idx];
-    }
-    return ip;
-}
-
 }  // namespace
 
 std::vector<SearchResult> IndexFlatIP::search(std::span<const float> query,
@@ -88,7 +82,7 @@ std::vector<SearchResult> IndexFlatIP::search(std::span<const float> query,
 
     for (std::size_t id = 0; id < total_ids; ++id) {
         const float* item = vectors_.data() + id * dimension_;
-        const float score = inner_product(query, item, dimension_);
+        const float score = detail::dot_product(query.data(), item, dimension_);
         const SearchResult candidate{id, score};
 
         if (heap.size() < k) {
@@ -127,14 +121,14 @@ std::vector<std::vector<SearchResult>> IndexFlatIP::search_batch(
     }
 
     const std::size_t query_count = queries.size() / dimension_;
-    std::vector<std::vector<SearchResult>> results;
-    results.reserve(query_count);
+    std::vector<std::vector<SearchResult>> results(query_count);
 
-    for (std::size_t query_id = 0; query_id < query_count; ++query_id) {
-        const std::span<const float> query(
-            queries.data() + query_id * dimension_, dimension_);
-        results.push_back(search(query, k));
-    }
+    detail::parallel_for(
+        query_count, [this, queries, k, &results](std::size_t query_id) {
+            const std::span<const float> query(
+                queries.data() + query_id * dimension_, dimension_);
+            results[query_id] = search(query, k);
+        });
 
     return results;
 }

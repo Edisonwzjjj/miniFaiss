@@ -7,6 +7,8 @@
 #include <utility>
 #include <vector>
 
+#include "parallel_for.hpp"
+
 namespace minifaiss {
 namespace {
 
@@ -349,14 +351,14 @@ std::vector<std::vector<SearchResult>> IndexIVFPQ::search_batch(
     }
 
     const std::size_t query_count = queries.size() / dimension_;
-    std::vector<std::vector<SearchResult>> results;
-    results.reserve(query_count);
+    std::vector<std::vector<SearchResult>> results(query_count);
 
-    for (std::size_t query_id = 0; query_id < query_count; ++query_id) {
+    detail::parallel_for(query_count, [this, queries, k, nprobe,
+                                       &results](std::size_t query_id) {
         const std::span<const float> query(
             queries.data() + query_id * dimension_, dimension_);
-        results.push_back(search(query, k, nprobe));
-    }
+        results[query_id] = search(query, k, nprobe);
+    });
 
     return results;
 }

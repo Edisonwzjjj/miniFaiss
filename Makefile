@@ -1,7 +1,7 @@
 BUILD_DIR := .build
 BUILD_TYPE ?= Debug
 
-.PHONY: configure build check test run bench clean
+.PHONY: configure build check test run bench bench-dot clean
 
 configure:
 	cmake -S . -B $(BUILD_DIR) -DCMAKE_BUILD_TYPE=$(BUILD_TYPE)
@@ -20,6 +20,10 @@ run: build
 bench:
 	$(MAKE) BUILD_TYPE=Release build
 	$(BUILD_DIR)/minifaiss_bench
+
+bench-dot:
+	$(MAKE) BUILD_TYPE=Release build
+	$(BUILD_DIR)/minifaiss_dot_product_bench
 
 clean:
 	cmake -E rm -rf $(BUILD_DIR)

@@ -7,6 +7,9 @@
 #include <utility>
 #include <vector>
 
+#include "minifaiss/detail/dot_product.hpp"
+#include "parallel_for.hpp"
+
 namespace minifaiss {
 namespace {
 
@@ -186,7 +189,7 @@ std::vector<SearchResult> IndexIVFFlat::search(std::span<const float> query,
     for (std::size_t list_id = 0; list_id < nlist_; ++list_id) {
         const float* centroid = centroids_.data() + list_id * dimension_;
         centroid_scores.push_back(
-            {list_id, inner_product(query.data(), centroid, dimension_)});
+            {list_id, detail::dot_product(query.data(), centroid, dimension_)});
     }
 
     std::sort(centroid_scores.begin(), centroid_scores.end(),
@@ -209,7 +212,7 @@ std::vector<SearchResult> IndexIVFFlat::search(std::span<const float> query,
             const float* item = list.vectors.data() + local_id * dimension_;
             const SearchResult candidate{
                 list.ids[local_id],
-                inner_product(query.data(), item, dimension_),
+                detail::dot_product(query.data(), item, dimension_),
             };
 
             if (search_heap.size() < k) {
@@ -261,14 +264,14 @@ std::vector<std::vector<SearchResult>> IndexIVFFlat::search_batch(
     }
 
     const std::size_t query_count = queries.size() / dimension_;
-    std::vector<std::vector<SearchResult>> results;
-    results.reserve(query_count);
+    std::vector<std::vector<SearchResult>> results(query_count);
 
-    for (std::size_t query_id = 0; query_id < query_count; ++query_id) {
+    detail::parallel_for(query_count, [this, queries, k, nprobe,
+                                       &results](std::size_t query_id) {
         const std::span<const float> query(
             queries.data() + query_id * dimension_, dimension_);
-        results.push_back(search(query, k, nprobe));
-    }
+        results[query_id] = search(query, k, nprobe);
+    });
 
     return results;
 }

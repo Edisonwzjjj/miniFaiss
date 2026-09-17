@@ -10,6 +10,8 @@
 #include <stdexcept>
 #include <vector>
 
+#include "minifaiss/detail/dot_product.hpp"
+
 namespace {
 
 class TestRunner {
@@ -36,6 +38,31 @@ public:
 private:
     int failures_ = 0;
 };
+
+void test_dot_product_simd_matches_scalar(TestRunner& tests) {
+    constexpr std::array<std::size_t, 13> lengths = {
+        0, 1, 2, 3, 4, 5, 7, 8, 9, 127, 128, 129,
+    };
+
+    for (const std::size_t length : lengths) {
+        std::vector<float> lhs(length);
+        std::vector<float> rhs(length);
+        for (std::size_t value_id = 0; value_id < length; ++value_id) {
+            lhs[value_id] =
+                static_cast<float>(static_cast<int>(value_id % 7) - 3);
+            rhs[value_id] =
+                static_cast<float>(static_cast<int>(value_id % 5) - 2);
+        }
+
+        const float expected = minifaiss::detail::dot_product_scalar(
+            lhs.data(), rhs.data(), length);
+        const float actual =
+            minifaiss::detail::dot_product(lhs.data(), rhs.data(), length);
+        tests.check(
+            actual == expected,
+            "SIMD dot product matches scalar across vector and tail lengths");
+    }
+}
 
 void test_constructor(TestRunner& tests) {
     const minifaiss::IndexFlatIP index(3);
@@ -313,6 +340,7 @@ void test_search_matches_randomized_oracle(TestRunner& tests) {
 int main() {
     TestRunner tests;
 
+    test_dot_product_simd_matches_scalar(tests);
     test_constructor(tests);
     test_add_vectors(tests);
     test_add_rejects_invalid_input(tests);

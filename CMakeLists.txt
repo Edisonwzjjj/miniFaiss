@@ -24,6 +24,7 @@ add_library(minifaiss STATIC
     src/index_ivf_flat.cpp
     src/index_ivf_pq.cpp
     src/product_quantizer.cpp
+    src/search_executor.cpp
 )
 
 target_include_directories(minifaiss
@@ -72,8 +73,22 @@ add_test(
     COMMAND minifaiss_product_quantizer_tests
 )
 
+add_executable(minifaiss_search_executor_tests
+    tests/search_executor_test.cpp
+)
+target_link_libraries(minifaiss_search_executor_tests PRIVATE minifaiss)
+enable_project_warnings(minifaiss_search_executor_tests)
+add_test(NAME minifaiss_search_executor_tests
+         COMMAND minifaiss_search_executor_tests)
+
 add_executable(minifaiss_bench
     benchmarks/bench_flat_ip.cpp
 )
 target_link_libraries(minifaiss_bench PRIVATE minifaiss)
 enable_project_warnings(minifaiss_bench)
+
+add_executable(minifaiss_dot_product_bench
+    benchmarks/bench_dot_product.cpp
+)
+target_link_libraries(minifaiss_dot_product_bench PRIVATE minifaiss)
+enable_project_warnings(minifaiss_dot_product_bench)
