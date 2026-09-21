@@ -2,15 +2,20 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <queue>
 #include <stdexcept>
 #include <utility>
 #include <vector>
 
+#include "binary_io.hpp"
 #include "parallel_for.hpp"
 
 namespace minifaiss {
 namespace {
+
+constexpr std::size_t kInvalidLocation =
+    std::numeric_limits<std::size_t>::max();
 
 float inner_product(const float* lhs, const float* rhs, std::size_t dimension) {
     float score = 0.0F;
@@ -176,12 +181,12 @@ void IndexIVFPQ::train(std::span<const float> training_vectors,
     trained_ = true;
 }
 
-void IndexIVFPQ::add(std::span<const float> vectors) {
+std::vector<IndexId> IndexIVFPQ::add(std::span<const float> vectors) {
     if (!is_trained()) {
         throw std::logic_error("cannot add vectors to an untrained index");
     }
     if (vectors.empty()) {
-        return;
+        return {};
     }
     if (vectors.size() % dimension_ != 0) {
         throw std::invalid_argument(
@@ -196,6 +201,10 @@ void IndexIVFPQ::add(std::span<const float> vectors) {
     }
 
     const std::size_t vector_count = vectors.size() / dimension_;
+    if (vector_count > std::numeric_limits<IndexId>::max() - next_id_) {
+        throw std::overflow_error("index ID overflow");
+    }
+
     std::vector<std::size_t> list_ids(vector_count);
     std::vector<std::uint8_t> batch_codes(vector_count * m());
     std::vector<std::size_t> list_counts(nlist_, 0);
@@ -222,29 +231,195 @@ void IndexIVFPQ::add(std::span<const float> vectors) {
         }
     }
 
-    locations_.reserve(size_ + vector_count);
+    const IndexId first_id = next_id_;
+    const IndexId next_id = first_id + vector_count;
+    locations_.reserve(next_id);
     for (std::size_t list_id = 0; list_id < nlist_; ++list_id) {
         InvertedList& list = lists_[list_id];
         list.ids.reserve(list.ids.size() + list_counts[list_id]);
         list.codes.reserve(list.codes.size() + list_counts[list_id] * m());
     }
 
+    std::vector<IndexId> assigned_ids;
+    assigned_ids.reserve(vector_count);
+    locations_.resize(next_id, {kInvalidLocation, kInvalidLocation});
+
     for (std::size_t vector_id = 0; vector_id < vector_count; ++vector_id) {
         const std::size_t list_id = list_ids[vector_id];
         InvertedList& list = lists_[list_id];
         const std::size_t local_id = list.ids.size();
-        const std::size_t global_id = size_ + vector_id;
+        const IndexId id = first_id + vector_id;
 
-        list.ids.push_back(global_id);
+        list.ids.push_back(id);
         for (std::size_t subquantizer_id = 0; subquantizer_id < m();
              ++subquantizer_id) {
             list.codes.push_back(
                 batch_codes[vector_id * m() + subquantizer_id]);
         }
-        locations_.push_back({list_id, local_id});
+        locations_[id] = {list_id, local_id};
+        assigned_ids.push_back(id);
     }
 
     size_ += vector_count;
+    next_id_ = next_id;
+    return assigned_ids;
+}
+
+bool IndexIVFPQ::contains(IndexId id) const noexcept {
+    return id < locations_.size() &&
+           locations_[id].list_id != kInvalidLocation;
+}
+
+std::size_t IndexIVFPQ::remove_ids(std::span<const IndexId> ids) {
+    std::size_t removed_count = 0;
+
+    for (const IndexId id : ids) {
+        if (!contains(id)) {
+            continue;
+        }
+
+        const Location location = locations_[id];
+        InvertedList& list = lists_[location.list_id];
+        const std::size_t last_local_id = list.ids.size() - 1;
+        const IndexId moved_id = list.ids[last_local_id];
+
+        if (location.local_id != last_local_id) {
+            list.ids[location.local_id] = moved_id;
+            std::uint8_t* destination =
+                list.codes.data() + location.local_id * m();
+            const std::uint8_t* source =
+                list.codes.data() + last_local_id * m();
+            std::copy_n(source, m(), destination);
+            locations_[moved_id] = {location.list_id, location.local_id};
+        }
+
+        list.ids.pop_back();
+        list.codes.resize(list.codes.size() - m());
+        locations_[id] = {kInvalidLocation, kInvalidLocation};
+        --size_;
+        ++removed_count;
+
+    }
+
+    return removed_count;
+}
+
+void IndexIVFPQ::reset() {
+    for (InvertedList& list : lists_) {
+        list.ids.clear();
+        list.codes.clear();
+    }
+    locations_.clear();
+    size_ = 0;
+}
+
+void IndexIVFPQ::save(const std::filesystem::path& path) const {
+    detail::BinaryWriter payload;
+    payload.write_u64(dimension_);
+    payload.write_u64(nlist_);
+    payload.write_u64(m());
+    payload.write_u64(ksub());
+    payload.write_u64(size_);
+    payload.write_u64(next_id_);
+    payload.write_u8(trained_ ? 1U : 0U);
+    if (trained_) {
+        for (const float value : centroids_) {
+            payload.write_float(value);
+        }
+        for (const float value : quantizer_.codebooks()) {
+            payload.write_float(value);
+        }
+    }
+    for (const InvertedList& list : lists_) {
+        payload.write_u64(list.ids.size());
+        for (std::size_t local_id = 0; local_id < list.ids.size(); ++local_id) {
+            payload.write_u64(list.ids[local_id]);
+            payload.write_bytes(list.codes.data() + local_id * m(), m());
+        }
+    }
+    detail::write_index_file(path, detail::IndexFileType::kIVFPQ, payload);
+}
+
+IndexIVFPQ IndexIVFPQ::load(const std::filesystem::path& path) {
+    const std::vector<std::uint8_t> bytes =
+        detail::read_index_file(path, detail::IndexFileType::kIVFPQ);
+    detail::BinaryReader reader(bytes);
+    const std::size_t dimension = detail::as_size(reader.read_u64());
+    const std::size_t nlist = detail::as_size(reader.read_u64());
+    const std::size_t m = detail::as_size(reader.read_u64());
+    const std::size_t ksub = detail::as_size(reader.read_u64());
+    const std::size_t size = detail::as_size(reader.read_u64());
+    const IndexId next_id = detail::as_size(reader.read_u64());
+    const std::uint8_t trained_value = reader.read_u8();
+    if (dimension == 0 || nlist == 0 || m == 0 || dimension % m != 0 ||
+        ksub == 0 || ksub > 256 || trained_value > 1U || next_id < size) {
+        throw std::runtime_error("index file state is invalid");
+    }
+    const bool trained = trained_value == 1U;
+    if (!trained && size != 0) {
+        throw std::runtime_error("untrained index file contains vectors");
+    }
+
+    IndexIVFPQ index(dimension, nlist, m, ksub);
+    if (trained) {
+        const std::size_t centroid_count = detail::checked_product(nlist, dimension);
+        index.centroids_.resize(centroid_count);
+        for (float& value : index.centroids_) {
+            value = reader.read_float();
+            if (!std::isfinite(value)) {
+                throw std::runtime_error("index file contains non-finite centroid");
+            }
+        }
+        const std::size_t codebook_count = detail::checked_product(
+            detail::checked_product(m, ksub), dimension / m);
+        std::vector<float> codebooks(codebook_count);
+        for (float& value : codebooks) {
+            value = reader.read_float();
+            if (!std::isfinite(value)) {
+                throw std::runtime_error("index file contains non-finite codebook");
+            }
+        }
+        try {
+            index.quantizer_.set_codebooks(codebooks);
+        } catch (const std::invalid_argument&) {
+            throw std::runtime_error("index file codebook is invalid");
+        }
+        index.trained_ = true;
+    }
+    index.locations_.resize(next_id, {kInvalidLocation, kInvalidLocation});
+    std::size_t loaded_count = 0;
+    for (std::size_t list_id = 0; list_id < nlist; ++list_id) {
+        InvertedList& list = index.lists_[list_id];
+        const std::size_t list_size = detail::as_size(reader.read_u64());
+        if (list_size > size - loaded_count) {
+            throw std::runtime_error("index file list size is invalid");
+        }
+        list.ids.reserve(list_size);
+        list.codes.reserve(detail::checked_product(list_size, m));
+        for (std::size_t local_id = 0; local_id < list_size; ++local_id) {
+            const IndexId id = detail::as_size(reader.read_u64());
+            if (id >= next_id || index.locations_[id].list_id != kInvalidLocation) {
+                throw std::runtime_error("index file ID is invalid");
+            }
+            std::vector<std::uint8_t> codes(m);
+            reader.read_bytes(codes.data(), codes.size());
+            for (const std::uint8_t code : codes) {
+                if (code >= ksub) {
+                    throw std::runtime_error("index file PQ code is invalid");
+                }
+            }
+            list.ids.push_back(id);
+            list.codes.insert(list.codes.end(), codes.begin(), codes.end());
+            index.locations_[id] = {list_id, local_id};
+        }
+        loaded_count += list_size;
+    }
+    if (loaded_count != size || !reader.empty()) {
+        throw std::runtime_error("index file payload is invalid");
+    }
+    index.size_ = size;
+    index.next_id_ = next_id;
+    return index;
 }
 
 std::vector<SearchResult> IndexIVFPQ::search(std::span<const float> query,
@@ -363,11 +538,11 @@ std::vector<std::vector<SearchResult>> IndexIVFPQ::search_batch(
     return results;
 }
 
-std::vector<float> IndexIVFPQ::reconstruct(std::size_t id) const {
+std::vector<float> IndexIVFPQ::reconstruct(IndexId id) const {
     if (!is_trained()) {
         throw std::logic_error("cannot reconstruct from an untrained index");
     }
-    if (id >= size_) {
+    if (!contains(id)) {
         throw std::out_of_range("vector ID is outside the index");
     }
 

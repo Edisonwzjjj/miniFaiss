@@ -1,6 +1,7 @@
 #include "minifaiss/index_ivf_flat.hpp"
 
 #include <array>
+#include <filesystem>
 #include <iostream>
 #include <limits>
 #include <stdexcept>
@@ -127,34 +128,139 @@ void test_add_requires_training_and_preserves_size(TestRunner& tests) {
     minifaiss::IndexIVFFlat index(2, 2);
 
     tests.check_throws_logic_error(
-        [&index] { index.add(std::array<float, 2>{1.0F, 0.0F}); },
+        [&index] { (void)index.add(std::array<float, 2>{1.0F, 0.0F}); },
         "add before training is rejected");
     tests.check(index.size() == 0, "rejected untrained add preserves size");
+    tests.check_throws_logic_error(
+        [&index] { (void)index.add(std::span<const float>{}); },
+        "untrained empty add is rejected");
 
     index.train(std::array<float, 4>{1.0F, 0.0F, 0.0F, 1.0F}, 1);
-    index.add(std::array<float, 4>{0.9F, 0.1F, 0.2F, 0.8F});
+    (void)index.add(std::array<float, 4>{0.9F, 0.1F, 0.2F, 0.8F});
     tests.check(index.size() == 2, "adding two vectors increases size by two");
 
-    index.add(std::array<float, 2>{0.8F, 0.2F});
+    (void)index.add(std::array<float, 2>{0.8F, 0.2F});
     tests.check(index.size() == 3, "later additions retain global index size");
 
-    index.add(std::span<const float>{});
+    (void)index.add(std::span<const float>{});
     tests.check(index.size() == 3, "empty add is a no-op");
 
     tests.check_throws_invalid_argument(
-        [&index] { index.add(std::array<float, 3>{1.0F, 2.0F, 3.0F}); },
+        [&index] { (void)index.add(std::array<float, 3>{1.0F, 2.0F, 3.0F}); },
         "incomplete add vector is rejected");
     tests.check(index.size() == 3, "malformed add preserves size");
 
     tests.check_throws_invalid_argument(
         [&index] {
-            index.add(std::array<float, 2>{
+            (void)index.add(std::array<float, 2>{
                 1.0F,
                 std::numeric_limits<float>::infinity(),
             });
         },
         "non-finite add vector is rejected");
     tests.check(index.size() == 3, "non-finite add preserves size");
+}
+
+void test_index_ids_and_removal(TestRunner& tests) {
+    minifaiss::IndexIVFFlat index(2, 1);
+    index.train(std::array<float, 2>{1.0F, 0.0F}, 1);
+
+    const auto ids = index.add(std::array<float, 6>{
+        1.0F, 0.0F, 2.0F, 0.0F, 3.0F, 0.0F,
+    });
+    tests.check(ids.size() == 3 && ids[0] == 0 && ids[1] == 1 &&
+                    ids[2] == 2,
+                "IVF add returns consecutive index IDs");
+    tests.check(index.contains(ids[0]) && index.contains(ids[2]),
+                "IVF contains assigned IDs");
+
+    const std::array<minifaiss::IndexId, 3> ids_to_remove = {ids[1], 999,
+                                                               ids[1]};
+    tests.check(index.remove_ids(ids_to_remove) == 1,
+                "IVF removal ignores duplicate and unknown IDs");
+    tests.check(index.size() == 2 && !index.contains(ids[1]),
+                "IVF removal invalidates only the removed ID");
+    tests.check(index.contains(ids[2]),
+                "IVF swap-and-pop keeps the moved ID valid");
+
+    const auto results = index.search(std::array<float, 2>{1.0F, 0.0F}, 3, 1);
+    tests.check(results.size() == 2 && results[0].id == ids[2],
+                "IVF search returns the moved vector with its stable ID");
+    for (const auto& result : results) {
+        tests.check(result.id != ids[1], "IVF search excludes deleted IDs");
+    }
+
+    tests.check_throws_invalid_argument(
+        [&index] { (void)index.add(std::array<float, 3>{1.0F, 2.0F, 3.0F}); },
+        "invalid IVF add does not consume an ID");
+    const auto new_ids = index.add(std::array<float, 2>{4.0F, 0.0F});
+    tests.check(new_ids.size() == 1 && new_ids[0] == 3,
+                "IVF does not reuse deleted IDs");
+    tests.check(index.remove_ids(
+                    std::span<const minifaiss::IndexId>{}) == 0,
+                "empty IVF removal is a no-op");
+}
+
+void test_reset_preserves_training_and_id_sequence(TestRunner& tests) {
+    minifaiss::IndexIVFFlat index(2, 1);
+    index.train(std::array<float, 2>{1.0F, 0.0F}, 1);
+    const auto old_ids = index.add(std::array<float, 4>{1.0F, 0.0F, 2.0F, 0.0F});
+
+    index.reset();
+    tests.check(index.size() == 0, "IVF reset clears indexed vectors");
+    tests.check(index.is_trained(), "IVF reset preserves training state");
+    tests.check(!index.contains(old_ids[0]) && !index.contains(old_ids[1]),
+                "IVF reset invalidates old IDs");
+    tests.check(index.search(std::array<float, 2>{1.0F, 0.0F}, 1, 1).empty(),
+                "trained IVF reset index searches as empty");
+
+    const auto new_ids = index.add(std::array<float, 2>{3.0F, 0.0F});
+    tests.check(new_ids.size() == 1 && new_ids[0] == 2,
+                "IVF reset does not reuse IDs");
+    const auto results = index.search(std::array<float, 2>{1.0F, 0.0F}, 1, 1);
+    tests.check(results.size() == 1 && results[0].id == new_ids[0],
+                "IVF accepts vectors without retraining after reset");
+
+    minifaiss::IndexIVFFlat untrained_index(2, 1);
+    untrained_index.reset();
+    tests.check(!untrained_index.is_trained(),
+                "untrained IVF reset remains untrained");
+    tests.check_throws_logic_error(
+        [&untrained_index] {
+            (void)untrained_index.add(std::array<float, 2>{1.0F, 0.0F});
+        },
+        "untrained IVF reset still rejects add");
+}
+
+void test_save_and_load_preserve_index_state(TestRunner& tests) {
+    const std::filesystem::path path =
+        std::filesystem::temp_directory_path() / "minifaiss_ivf_flat_v1_test.bin";
+    std::filesystem::remove(path);
+
+    minifaiss::IndexIVFFlat index(2, 1);
+    index.train(std::array<float, 2>{1.0F, 0.0F}, 1);
+    const auto ids = index.add(std::array<float, 6>{
+        1.0F, 0.0F, 2.0F, 0.0F, 3.0F, 0.0F,
+    });
+    const std::array<minifaiss::IndexId, 1> removed_ids = {ids[1]};
+    (void)index.remove_ids(removed_ids);
+    index.save(path);
+
+    minifaiss::IndexIVFFlat loaded = minifaiss::IndexIVFFlat::load(path);
+    tests.check(loaded.is_trained() && loaded.dimension() == 2 &&
+                    loaded.nlist() == 1 && loaded.size() == 2,
+                "IVF load restores trained index state");
+    tests.check(loaded.contains(ids[0]) && loaded.contains(ids[2]) &&
+                    !loaded.contains(ids[1]),
+                "IVF load preserves ID holes");
+    const auto results = loaded.search(std::array<float, 2>{1.0F, 0.0F}, 2, 1);
+    tests.check(results.size() == 2 && results[0].id == ids[2],
+                "IVF load restores inverted-list vectors");
+    const auto new_ids = loaded.add(std::array<float, 2>{4.0F, 0.0F});
+    tests.check(new_ids.size() == 1 && new_ids[0] == 3,
+                "IVF load preserves next ID");
+
+    std::filesystem::remove(path);
 }
 
 void test_search_rejects_invalid_input(TestRunner& tests) {
@@ -209,7 +315,7 @@ void test_search_rejects_invalid_input(TestRunner& tests) {
 void test_search_batch_matches_scalar_search(TestRunner& tests) {
     minifaiss::IndexIVFFlat index(2, 2);
     index.train(std::array<float, 4>{1.0F, 0.0F, 0.0F, 1.0F}, 1);
-    index.add(std::array<float, 6>{
+    (void)index.add(std::array<float, 6>{
         0.9F,
         0.1F,
         0.8F,
@@ -282,7 +388,7 @@ void test_single_probe_searches_one_list(TestRunner& tests) {
         },
         1);
 
-    index.add(std::array<float, 6>{
+    (void)index.add(std::array<float, 6>{
         0.9F,
         0.1F,
         0.8F,
@@ -323,11 +429,11 @@ void test_full_probe_matches_flat_search(TestRunner& tests) {
     const std::array<std::size_t, 4> k_values = {1, 3, 6, 10};
 
     minifaiss::IndexFlatIP flat_index(dimension);
-    flat_index.add(item_vectors);
+    (void)flat_index.add(item_vectors);
 
     minifaiss::IndexIVFFlat ivf_index(dimension, nlist);
     ivf_index.train(training_vectors, 2);
-    ivf_index.add(std::array<float, 6>{
+    (void)ivf_index.add(std::array<float, 6>{
         0.9F,
         0.1F,
         0.2F,
@@ -335,7 +441,7 @@ void test_full_probe_matches_flat_search(TestRunner& tests) {
         1.0F,
         0.3F,
     });
-    ivf_index.add(std::array<float, 6>{
+    (void)ivf_index.add(std::array<float, 6>{
         0.1F,
         1.0F,
         -0.8F,
@@ -377,6 +483,9 @@ int main() {
     test_train_sets_trained_state(tests);
     test_train_rejects_invalid_input(tests);
     test_add_requires_training_and_preserves_size(tests);
+    test_index_ids_and_removal(tests);
+    test_reset_preserves_training_and_id_sequence(tests);
+    test_save_and_load_preserve_index_state(tests);
     test_search_rejects_invalid_input(tests);
     test_search_batch_matches_scalar_search(tests);
     test_single_probe_searches_one_list(tests);

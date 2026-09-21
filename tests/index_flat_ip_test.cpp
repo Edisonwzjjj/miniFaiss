@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <filesystem>
 #include <iostream>
 #include <limits>
 #include <random>
@@ -30,6 +31,15 @@ public:
             function();
             check(false, message);
         } catch (const std::invalid_argument&) {
+        }
+    }
+
+    template <typename Function>
+    void check_throws_runtime_error(Function&& function, const char* message) {
+        try {
+            function();
+            check(false, message);
+        } catch (const std::runtime_error&) {
         }
     }
 
@@ -80,30 +90,138 @@ void test_add_vectors(TestRunner& tests) {
     const std::array<float, 6> first_batch = {
         1.0F, 2.0F, 3.0F, 4.0F, 5.0F, 6.0F,
     };
-    index.add(first_batch);
+    (void)index.add(first_batch);
     tests.check(index.size() == 2,
                 "adding two 3D vectors increases size by two");
 
     const std::array<float, 3> second_batch = {7.0F, 8.0F, 9.0F};
-    index.add(second_batch);
+    (void)index.add(second_batch);
     tests.check(index.size() == 3, "a later batch preserves previous vectors");
 
-    index.add(std::span<const float>{});
+    (void)index.add(std::span<const float>{});
     tests.check(index.size() == 3, "adding an empty batch is a no-op");
+}
+
+void test_index_ids_and_removal(TestRunner& tests) {
+    minifaiss::IndexFlatIP index(2);
+
+    const auto first_ids = index.add(std::array<float, 8>{
+        1.0F, 0.0F, 0.0F, 1.0F, 3.0F, 0.0F, 0.0F, 4.0F,
+    });
+    tests.check(first_ids.size() == 4, "add returns one ID per vector");
+    tests.check(first_ids[0] == 0 && first_ids[1] == 1 &&
+                    first_ids[2] == 2 && first_ids[3] == 3,
+                "first add returns consecutive IDs");
+    tests.check(index.contains(0) && index.contains(3),
+                "assigned IDs are contained");
+    tests.check(!index.contains(4), "unassigned ID is not contained");
+
+    const auto empty_ids = index.add(std::span<const float>{});
+    tests.check(empty_ids.empty(), "empty add returns no IDs");
+
+    tests.check_throws_invalid_argument(
+        [&index] {
+            (void)index.add(std::array<float, 3>{1.0F, 2.0F, 3.0F});
+        },
+        "invalid add is rejected before assigning IDs");
+    const auto next_ids = index.add(std::array<float, 2>{2.0F, 2.0F});
+    tests.check(next_ids.size() == 1 && next_ids[0] == 4,
+                "failed add does not consume an ID");
+
+    const std::array<minifaiss::IndexId, 3> ids_to_remove = {1, 999, 1};
+    const std::size_t removed = index.remove_ids(ids_to_remove);
+    tests.check(removed == 1, "duplicate and unknown IDs are ignored");
+    tests.check(index.size() == 4, "removing one ID reduces size once");
+    tests.check(!index.contains(1), "removed ID is invalid");
+    tests.check(index.contains(3) && index.contains(4),
+                "other IDs remain valid after removal");
+
+    const auto results = index.search(std::array<float, 2>{0.0F, 1.0F}, 4);
+    tests.check(results.size() == 4, "search returns remaining vectors");
+    tests.check(results[0].id == 3 && results[0].score == 4.0F,
+                "swap-and-pop keeps moved vector bound to its original ID");
+    for (const auto& result : results) {
+        tests.check(result.id != 1, "search never returns a removed ID");
+    }
+
+    tests.check(index.remove_ids(std::span<const minifaiss::IndexId>{}) == 0,
+                "empty removal is a no-op");
+    const auto final_ids = index.add(std::array<float, 2>{5.0F, 5.0F});
+    tests.check(final_ids.size() == 1 && final_ids[0] == 5,
+                "deleted IDs are never reused");
+}
+
+void test_reset_clears_vectors_and_preserves_id_sequence(TestRunner& tests) {
+    minifaiss::IndexFlatIP index(2);
+    const auto old_ids = index.add(std::array<float, 4>{1.0F, 0.0F, 0.0F, 1.0F});
+
+    index.reset();
+    tests.check(index.size() == 0, "reset clears Flat vectors");
+    tests.check(!index.contains(old_ids[0]) && !index.contains(old_ids[1]),
+                "reset invalidates all Flat IDs");
+    tests.check(index.search(std::array<float, 2>{1.0F, 0.0F}, 1).empty(),
+                "search on reset Flat index is empty");
+
+    const auto new_ids = index.add(std::array<float, 2>{2.0F, 0.0F});
+    tests.check(new_ids.size() == 1 && new_ids[0] == 2,
+                "reset does not reuse Flat IDs");
+    tests.check(index.contains(new_ids[0]), "Flat ID after reset is valid");
+
+    index.reset();
+    tests.check(index.size() == 0 && !index.contains(new_ids[0]),
+                "repeated Flat reset is idempotent");
+}
+
+void test_save_and_load_preserve_index_state(TestRunner& tests) {
+    const std::filesystem::path path =
+        std::filesystem::temp_directory_path() / "minifaiss_flat_v1_test.bin";
+    const std::filesystem::path missing_path =
+        std::filesystem::temp_directory_path() / "minifaiss_missing_v1_test.bin";
+    std::filesystem::remove(path);
+    std::filesystem::remove(missing_path);
+    tests.check_throws_runtime_error(
+        [&missing_path] { (void)minifaiss::IndexFlatIP::load(missing_path); },
+        "Flat load rejects a missing file");
+
+    minifaiss::IndexFlatIP index(2);
+    const auto ids = index.add(std::array<float, 6>{
+        1.0F, 0.0F, 2.0F, 0.0F, 3.0F, 0.0F,
+    });
+    const std::array<minifaiss::IndexId, 1> removed_ids = {ids[1]};
+    (void)index.remove_ids(removed_ids);
+    index.save(path);
+
+    minifaiss::IndexFlatIP loaded = minifaiss::IndexFlatIP::load(path);
+    tests.check(loaded.dimension() == 2 && loaded.size() == 2,
+                "Flat load restores configuration and size");
+    tests.check(loaded.contains(ids[0]) && loaded.contains(ids[2]) &&
+                    !loaded.contains(ids[1]),
+                "Flat load preserves ID holes");
+    const auto before = index.search(std::array<float, 2>{1.0F, 0.0F}, 2);
+    const auto after = loaded.search(std::array<float, 2>{1.0F, 0.0F}, 2);
+    tests.check(after.size() == before.size() && after[0].id == before[0].id &&
+                    after[0].score == before[0].score &&
+                    after[1].id == before[1].id && after[1].score == before[1].score,
+                "Flat load preserves search results");
+    const auto new_ids = loaded.add(std::array<float, 2>{4.0F, 0.0F});
+    tests.check(new_ids.size() == 1 && new_ids[0] == 3,
+                "Flat load preserves next ID");
+
+    std::filesystem::remove(path);
 }
 
 void test_add_rejects_invalid_input(TestRunner& tests) {
     minifaiss::IndexFlatIP index(3);
-    index.add(std::array<float, 3>{1.0F, 2.0F, 3.0F});
+    (void)index.add(std::array<float, 3>{1.0F, 2.0F, 3.0F});
 
     tests.check_throws_invalid_argument(
-        [&index] { index.add(std::array<float, 4>{4.0F, 5.0F, 6.0F, 7.0F}); },
+        [&index] { (void)index.add(std::array<float, 4>{4.0F, 5.0F, 6.0F, 7.0F}); },
         "a batch with incomplete vectors is rejected");
     tests.check(index.size() == 1, "malformed batch does not partially append");
 
     tests.check_throws_invalid_argument(
         [&index] {
-            index.add(std::array<float, 3>{
+            (void)index.add(std::array<float, 3>{
                 4.0F,
                 std::numeric_limits<float>::quiet_NaN(),
                 6.0F,
@@ -115,7 +233,7 @@ void test_add_rejects_invalid_input(TestRunner& tests) {
 
     tests.check_throws_invalid_argument(
         [&index] {
-            index.add(std::array<float, 3>{
+            (void)index.add(std::array<float, 3>{
                 4.0F,
                 std::numeric_limits<float>::infinity(),
                 6.0F,
@@ -127,7 +245,7 @@ void test_add_rejects_invalid_input(TestRunner& tests) {
 
 void test_search_by_inner_product(TestRunner& tests) {
     minifaiss::IndexFlatIP index(2);
-    index.add(std::array<float, 8>{
+    (void)index.add(std::array<float, 8>{
         1.0F,
         0.0F,
         0.0F,
@@ -157,7 +275,7 @@ void test_search_boundaries_and_invalid_input(TestRunner& tests) {
     tests.check(empty_results.empty(), "empty index search returns no results");
 
     minifaiss::IndexFlatIP index(2);
-    index.add(std::array<float, 4>{1.0F, 0.0F, 0.0F, 1.0F});
+    (void)index.add(std::array<float, 4>{1.0F, 0.0F, 0.0F, 1.0F});
 
     const auto all_results = index.search(std::array<float, 2>{1.0F, 1.0F}, 5);
     tests.check(all_results.size() == 2,
@@ -217,7 +335,7 @@ std::vector<minifaiss::SearchResult> reference_search(
 
 void test_search_batch_matches_scalar_search(TestRunner& tests) {
     minifaiss::IndexFlatIP index(2);
-    index.add(std::array<float, 8>{
+    (void)index.add(std::array<float, 8>{
         1.0F,
         0.0F,
         0.0F,
@@ -292,7 +410,7 @@ void test_search_matches_randomized_oracle(TestRunner& tests) {
             }
 
             minifaiss::IndexFlatIP index(dimension);
-            index.add(items);
+            (void)index.add(items);
 
             const std::array<std::size_t, 4> k_values = {
                 1,
@@ -343,6 +461,9 @@ int main() {
     test_dot_product_simd_matches_scalar(tests);
     test_constructor(tests);
     test_add_vectors(tests);
+    test_index_ids_and_removal(tests);
+    test_reset_clears_vectors_and_preserves_id_sequence(tests);
+    test_save_and_load_preserve_index_state(tests);
     test_add_rejects_invalid_input(tests);
     test_search_by_inner_product(tests);
     test_search_boundaries_and_invalid_input(tests);

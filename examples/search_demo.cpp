@@ -6,7 +6,7 @@
 int main() {
     minifaiss::IndexFlatIP index(2);
 
-    index.add(std::array<float, 8>{
+    (void)index.add(std::array<float, 8>{
         1.0F,
         0.0F,
         0.0F,

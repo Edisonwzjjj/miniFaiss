@@ -3,9 +3,11 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <filesystem>
 #include <iostream>
 #include <limits>
 #include <stdexcept>
+#include <vector>
 
 namespace {
 
@@ -169,7 +171,7 @@ void test_reconstruct_validates_and_decodes_vectors(TestRunner& tests) {
         [&index] { (void)index.reconstruct(0); },
         "reconstruct rejects IDs outside an empty index");
 
-    index.add(std::array<float, 4>{0.2F, 0.8F, 10.2F, 10.8F});
+    (void)index.add(std::array<float, 4>{0.2F, 0.8F, 10.2F, 10.8F});
     const auto reconstructed = index.reconstruct(0);
 
     tests.check(reconstructed.size() == 4,
@@ -219,9 +221,12 @@ void test_add_encodes_vectors_and_preserves_size(TestRunner& tests) {
     minifaiss::IndexIVFPQ index(4, 2, 2, 2);
 
     tests.check_throws_logic_error(
-        [&index] { index.add(std::array<float, 4>{1.0F, 2.0F, 3.0F, 4.0F}); },
+        [&index] { (void)index.add(std::array<float, 4>{1.0F, 2.0F, 3.0F, 4.0F}); },
         "add before training is rejected");
     tests.check(index.size() == 0, "rejected untrained add preserves size");
+    tests.check_throws_logic_error(
+        [&index] { (void)index.add(std::span<const float>{}); },
+        "untrained empty add is rejected");
 
     const std::array<float, 16> training_vectors = {
         0.0F, 0.0F, 10.0F, 10.0F, 8.0F, 8.0F,  20.0F, 20.0F,
@@ -229,7 +234,7 @@ void test_add_encodes_vectors_and_preserves_size(TestRunner& tests) {
     };
     index.train(training_vectors, 2);
 
-    index.add(std::array<float, 8>{
+    (void)index.add(std::array<float, 8>{
         0.2F,
         0.8F,
         10.2F,
@@ -241,20 +246,20 @@ void test_add_encodes_vectors_and_preserves_size(TestRunner& tests) {
     });
     tests.check(index.size() == 2, "adding two vectors increases size by two");
 
-    index.add(std::array<float, 4>{0.1F, 1.2F, 10.1F, 11.2F});
+    (void)index.add(std::array<float, 4>{0.1F, 1.2F, 10.1F, 11.2F});
     tests.check(index.size() == 3, "later additions preserve global size");
 
-    index.add(std::span<const float>{});
+    (void)index.add(std::span<const float>{});
     tests.check(index.size() == 3, "empty add is a no-op");
 
     tests.check_throws_invalid_argument(
-        [&index] { index.add(std::array<float, 3>{1.0F, 2.0F, 3.0F}); },
+        [&index] { (void)index.add(std::array<float, 3>{1.0F, 2.0F, 3.0F}); },
         "incomplete add vector is rejected");
     tests.check(index.size() == 3, "malformed add preserves size");
 
     tests.check_throws_invalid_argument(
         [&index] {
-            index.add(std::array<float, 4>{
+            (void)index.add(std::array<float, 4>{
                 1.0F,
                 2.0F,
                 std::numeric_limits<float>::infinity(),
@@ -267,6 +272,133 @@ void test_add_encodes_vectors_and_preserves_size(TestRunner& tests) {
     tests.check_throws_logic_error(
         [&index, &training_vectors] { index.train(training_vectors, 1); },
         "retraining after add is rejected");
+}
+
+void test_index_ids_and_removal(TestRunner& tests) {
+    minifaiss::IndexIVFPQ index(2, 1, 1, 2);
+    index.train(std::array<float, 4>{0.0F, 0.0F, 4.0F, 0.0F}, 1);
+
+    const auto ids = index.add(std::array<float, 6>{
+        0.0F, 0.0F, 2.0F, 0.0F, 4.0F, 0.0F,
+    });
+    tests.check(ids.size() == 3 && ids[0] == 0 && ids[1] == 1 &&
+                    ids[2] == 2,
+                "IVFPQ add returns consecutive index IDs");
+    const auto moved_before = index.reconstruct(ids[2]);
+
+    const std::array<minifaiss::IndexId, 3> ids_to_remove = {ids[1], 999,
+                                                               ids[1]};
+    tests.check(index.remove_ids(ids_to_remove) == 1,
+                "IVFPQ removal ignores duplicate and unknown IDs");
+    tests.check(index.size() == 2 && !index.contains(ids[1]),
+                "IVFPQ removal invalidates only the removed ID");
+    tests.check(index.contains(ids[2]),
+                "IVFPQ swap-and-pop keeps the moved ID valid");
+    tests.check_throws_out_of_range(
+        [&index, &ids] { (void)index.reconstruct(ids[1]); },
+        "IVFPQ cannot reconstruct a deleted ID");
+
+    const auto moved_after = index.reconstruct(ids[2]);
+    tests.check(moved_after == moved_before,
+                "IVFPQ moves the complete PQ code block with its ID");
+    const auto results = index.search(std::array<float, 2>{1.0F, 0.0F}, 3, 1);
+    for (const auto& result : results) {
+        tests.check(result.id != ids[1], "IVFPQ search excludes deleted IDs");
+    }
+
+    tests.check(index.remove_ids(std::array<minifaiss::IndexId, 1>{ids[2]}) ==
+                    1,
+                "IVFPQ removes a bucket-tail ID");
+    tests.check(index.size() == 1 && !index.contains(ids[2]),
+                "bucket-tail removal invalidates the ID and reduces size");
+    tests.check_throws_out_of_range(
+        [&index, &ids] { (void)index.reconstruct(ids[2]); },
+        "IVFPQ cannot reconstruct a removed bucket-tail ID");
+
+    tests.check_throws_invalid_argument(
+        [&index] { (void)index.add(std::array<float, 3>{1.0F, 2.0F, 3.0F}); },
+        "invalid IVFPQ add does not consume an ID");
+    const auto new_ids = index.add(std::array<float, 2>{1.0F, 0.0F});
+    tests.check(new_ids.size() == 1 && new_ids[0] == 3,
+                "IVFPQ does not reuse deleted IDs");
+    tests.check(index.remove_ids(
+                    std::span<const minifaiss::IndexId>{}) == 0,
+                "empty IVFPQ removal is a no-op");
+}
+
+void test_reset_preserves_training_and_id_sequence(TestRunner& tests) {
+    minifaiss::IndexIVFPQ index(2, 1, 1, 2);
+    index.train(std::array<float, 4>{0.0F, 0.0F, 4.0F, 0.0F}, 1);
+    const auto old_ids = index.add(std::array<float, 4>{1.0F, 0.0F, 3.0F, 0.0F});
+
+    index.reset();
+    tests.check(index.size() == 0, "IVFPQ reset clears indexed vectors");
+    tests.check(index.is_trained(), "IVFPQ reset preserves training state");
+    tests.check(!index.contains(old_ids[0]) && !index.contains(old_ids[1]),
+                "IVFPQ reset invalidates old IDs");
+    tests.check_throws_out_of_range(
+        [&index, &old_ids] { (void)index.reconstruct(old_ids[0]); },
+        "IVFPQ cannot reconstruct an ID invalidated by reset");
+
+    const auto new_ids = index.add(std::array<float, 2>{2.0F, 0.0F});
+    tests.check(new_ids.size() == 1 && new_ids[0] == 2,
+                "IVFPQ reset does not reuse IDs");
+    const auto reconstructed = index.reconstruct(new_ids[0]);
+    tests.check(reconstructed.size() == 2,
+                "IVFPQ reconstructs vectors added after reset");
+    const auto results = index.search(std::array<float, 2>{1.0F, 0.0F}, 1, 1);
+    tests.check(results.size() == 1 && results[0].id == new_ids[0],
+                "IVFPQ accepts vectors without retraining after reset");
+
+    minifaiss::IndexIVFPQ untrained_index(2, 1, 1, 2);
+    untrained_index.reset();
+    tests.check(!untrained_index.is_trained(),
+                "untrained IVFPQ reset remains untrained");
+    tests.check_throws_logic_error(
+        [&untrained_index] {
+            (void)untrained_index.add(std::array<float, 2>{1.0F, 0.0F});
+        },
+        "untrained IVFPQ reset still rejects add");
+    tests.check_throws_logic_error(
+        [&untrained_index] {
+            (void)untrained_index.reconstruct(0);
+        },
+        "untrained IVFPQ reset still rejects reconstruct");
+}
+
+void test_save_and_load_preserve_index_state(TestRunner& tests) {
+    const std::filesystem::path path =
+        std::filesystem::temp_directory_path() / "minifaiss_ivf_pq_v1_test.bin";
+    std::filesystem::remove(path);
+
+    minifaiss::IndexIVFPQ index(2, 1, 1, 2);
+    index.train(std::array<float, 4>{0.0F, 0.0F, 4.0F, 0.0F}, 1);
+    const auto ids = index.add(std::array<float, 6>{
+        0.0F, 0.0F, 2.0F, 0.0F, 4.0F, 0.0F,
+    });
+    const std::vector<float> expected_reconstruction = index.reconstruct(ids[2]);
+    const std::array<minifaiss::IndexId, 1> removed_ids = {ids[1]};
+    (void)index.remove_ids(removed_ids);
+    index.save(path);
+
+    minifaiss::IndexIVFPQ loaded = minifaiss::IndexIVFPQ::load(path);
+    tests.check(loaded.is_trained() && loaded.dimension() == 2 &&
+                    loaded.nlist() == 1 && loaded.m() == 1 &&
+                    loaded.ksub() == 2 && loaded.size() == 2,
+                "IVFPQ load restores trained index state");
+    tests.check(loaded.contains(ids[0]) && loaded.contains(ids[2]) &&
+                    !loaded.contains(ids[1]),
+                "IVFPQ load preserves ID holes");
+    tests.check(loaded.reconstruct(ids[2]) == expected_reconstruction,
+                "IVFPQ load restores PQ codes and codebooks");
+    tests.check_throws_out_of_range(
+        [&loaded, &ids] { (void)loaded.reconstruct(ids[1]); },
+        "IVFPQ load keeps deleted IDs invalid");
+    const auto new_ids = loaded.add(std::array<float, 2>{1.0F, 0.0F});
+    tests.check(new_ids.size() == 1 && new_ids[0] == 3,
+                "IVFPQ load preserves next ID");
+
+    std::filesystem::remove(path);
 }
 
 void test_search_validates_input(TestRunner& tests) {
@@ -330,7 +462,7 @@ void test_search_validates_input(TestRunner& tests) {
 void test_search_batch_matches_scalar_search(TestRunner& tests) {
     minifaiss::IndexIVFPQ index(2, 2, 1, 2);
     index.train(std::array<float, 4>{1.0F, 0.0F, 0.0F, 1.0F}, 1);
-    index.add(std::array<float, 6>{
+    (void)index.add(std::array<float, 6>{
         0.9F,
         0.1F,
         0.8F,
@@ -403,7 +535,7 @@ void test_single_probe_searches_one_list(TestRunner& tests) {
         },
         1);
 
-    index.add(std::array<float, 6>{
+    (void)index.add(std::array<float, 6>{
         0.9F,
         0.1F,
         0.8F,
@@ -425,7 +557,7 @@ void test_single_probe_searches_one_list(TestRunner& tests) {
 void test_equal_scores_use_ascending_global_id(TestRunner& tests) {
     minifaiss::IndexIVFPQ index(2, 1, 1, 1);
     index.train(std::array<float, 2>{1.0F, 0.0F}, 1);
-    index.add(std::array<float, 6>{
+    (void)index.add(std::array<float, 6>{
         1.0F,
         0.0F,
         1.0F,
@@ -455,7 +587,7 @@ void test_full_probe_matches_reconstruction_oracle(TestRunner& tests) {
 
     minifaiss::IndexIVFPQ index(dimension, nlist, 2, 2);
     index.train(training_vectors, 2);
-    index.add(std::array<float, 8>{
+    (void)index.add(std::array<float, 8>{
         0.2F,
         0.8F,
         10.2F,
@@ -465,7 +597,7 @@ void test_full_probe_matches_reconstruction_oracle(TestRunner& tests) {
         19.8F,
         21.2F,
     });
-    index.add(std::array<float, 4>{0.1F, 1.2F, 10.1F, 11.2F});
+    (void)index.add(std::array<float, 4>{0.1F, 1.2F, 10.1F, 11.2F});
 
     const std::array<std::array<float, 4>, 2> queries = {{
         {1.0F, 0.0F, 0.0F, 1.0F},
@@ -507,6 +639,9 @@ int main() {
     test_train_rejects_invalid_input(tests);
     test_reconstruct_validates_and_decodes_vectors(tests);
     test_add_encodes_vectors_and_preserves_size(tests);
+    test_index_ids_and_removal(tests);
+    test_reset_preserves_training_and_id_sequence(tests);
+    test_save_and_load_preserve_index_state(tests);
     test_search_validates_input(tests);
     test_search_batch_matches_scalar_search(tests);
     test_single_probe_searches_one_list(tests);

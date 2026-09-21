@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <filesystem>
 #include <span>
 #include <vector>
 
@@ -19,7 +20,12 @@ public:
     void train(std::span<const float> training_vectors,
                std::size_t iterations = 10);
 
-    void add(std::span<const float> vectors);
+    [[nodiscard]] std::vector<IndexId> add(std::span<const float> vectors);
+    [[nodiscard]] bool contains(IndexId id) const noexcept;
+    [[nodiscard]] std::size_t remove_ids(std::span<const IndexId> ids);
+    void reset();
+    void save(const std::filesystem::path& path) const;
+    [[nodiscard]] static IndexIVFFlat load(const std::filesystem::path& path);
 
     [[nodiscard]] std::vector<SearchResult> search(
         std::span<const float> query, std::size_t k,
@@ -31,7 +37,12 @@ public:
 private:
     struct InvertedList {
         std::vector<float> vectors;
-        std::vector<std::size_t> ids;
+        std::vector<IndexId> ids;
+    };
+
+    struct Location {
+        std::size_t list_id;
+        std::size_t local_id;
     };
 
     struct CentroidScore {
@@ -52,6 +63,7 @@ private:
     std::size_t dimension_;
     std::size_t nlist_;
     std::size_t size_ = 0;
+    IndexId next_id_ = 0;
     bool trained_ = false;
 
     // nlist_ 条连续 row-major 中心向量。
@@ -59,6 +71,7 @@ private:
 
     // 每个桶对应一个倒排链表。
     std::vector<InvertedList> lists_;
+    std::vector<Location> locations_;
 };
 
 }  // namespace minifaiss

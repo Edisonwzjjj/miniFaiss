@@ -4,8 +4,10 @@
 
 namespace minifaiss {
 
+using IndexId = std::size_t;
+
 struct SearchResult {
-    std::size_t id;
+    IndexId id;
     float score;
 };
 

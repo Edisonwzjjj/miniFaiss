@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <span>
 #include <vector>
 
@@ -24,7 +25,12 @@ public:
 
     void train(std::span<const float> training_vectors,
                std::size_t iterations = 10);
-    void add(std::span<const float> vectors);
+    [[nodiscard]] std::vector<IndexId> add(std::span<const float> vectors);
+    [[nodiscard]] bool contains(IndexId id) const noexcept;
+    [[nodiscard]] std::size_t remove_ids(std::span<const IndexId> ids);
+    void reset();
+    void save(const std::filesystem::path& path) const;
+    [[nodiscard]] static IndexIVFPQ load(const std::filesystem::path& path);
 
     [[nodiscard]] std::vector<SearchResult> search(
         std::span<const float> query, std::size_t k,
@@ -33,11 +39,11 @@ public:
         std::span<const float> queries, std::size_t k,
         std::size_t nprobe = 1) const;
 
-    [[nodiscard]] std::vector<float> reconstruct(std::size_t id) const;
+    [[nodiscard]] std::vector<float> reconstruct(IndexId id) const;
 
 private:
     struct InvertedList {
-        std::vector<std::size_t> ids;
+        std::vector<IndexId> ids;
         std::vector<std::uint8_t> codes;
     };
 
@@ -49,6 +55,7 @@ private:
     std::size_t dimension_;
     std::size_t nlist_;
     std::size_t size_ = 0;
+    IndexId next_id_ = 0;
     bool trained_ = false;
     std::vector<float> centroids_;
     ProductQuantizer quantizer_;

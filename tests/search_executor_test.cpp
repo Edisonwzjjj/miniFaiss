@@ -94,7 +94,7 @@ void test_shutdown_drains_tasks_and_rejects_submissions(TestRunner& tests) {
 
 void test_parallel_batch_search_matches_scalar_results(TestRunner& tests) {
     minifaiss::IndexFlatIP index(2);
-    index.add(std::array<float, 8>{
+    (void)index.add(std::array<float, 8>{
         1.0F,
         0.0F,
         0.0F,
@@ -127,7 +127,7 @@ void test_parallel_batch_search_matches_scalar_results(TestRunner& tests) {
 
 void test_nested_executor_and_batch_parallelism(TestRunner& tests) {
     minifaiss::IndexFlatIP index(2);
-    index.add(std::array<float, 8>{
+    (void)index.add(std::array<float, 8>{
         1.0F,
         0.0F,
         0.0F,
@@ -170,7 +170,7 @@ void test_nested_executor_and_batch_parallelism(TestRunner& tests) {
 
 void test_async_batch_search_matches_synchronous_results(TestRunner& tests) {
     minifaiss::IndexFlatIP flat_index(2);
-    flat_index.add(std::array<float, 6>{
+    (void)flat_index.add(std::array<float, 6>{
         1.0F,
         0.0F,
         0.0F,
@@ -181,7 +181,7 @@ void test_async_batch_search_matches_synchronous_results(TestRunner& tests) {
 
     minifaiss::IndexIVFFlat ivf_index(2, 2);
     ivf_index.train(std::array<float, 4>{1.0F, 0.0F, 0.0F, 1.0F}, 1);
-    ivf_index.add(std::array<float, 6>{
+    (void)ivf_index.add(std::array<float, 6>{
         0.9F,
         0.1F,
         0.1F,
@@ -192,7 +192,7 @@ void test_async_batch_search_matches_synchronous_results(TestRunner& tests) {
 
     minifaiss::IndexIVFPQ ivfpq_index(2, 2, 1, 2);
     ivfpq_index.train(std::array<float, 4>{1.0F, 0.0F, 0.0F, 1.0F}, 1);
-    ivfpq_index.add(std::array<float, 6>{
+    (void)ivfpq_index.add(std::array<float, 6>{
         0.9F,
         0.1F,
         0.1F,

@@ -16,6 +16,7 @@ public:
     [[nodiscard]] std::size_t ksub() const noexcept;
     [[nodiscard]] std::size_t subdimension() const noexcept;
     [[nodiscard]] bool has_codebooks() const noexcept;
+    [[nodiscard]] std::span<const float> codebooks() const noexcept;
 
     // Replaces all m * ksub codewords in row-major order.
     void set_codebooks(std::span<const float> codebooks);

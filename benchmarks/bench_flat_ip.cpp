@@ -204,7 +204,7 @@ int main() {
     }
 
     minifaiss::IndexFlatIP index(kDimension);
-    index.add(items);
+    (void)index.add(items);
 
     const BatchResults expected = scalar_search(index, queries, k);
 

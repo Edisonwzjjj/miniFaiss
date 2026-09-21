@@ -38,6 +38,10 @@ bool ProductQuantizer::has_codebooks() const noexcept {
     return !codebooks_.empty();
 }
 
+std::span<const float> ProductQuantizer::codebooks() const noexcept {
+    return codebooks_;
+}
+
 void ProductQuantizer::set_codebooks(std::span<const float> codebooks) {
     const std::size_t expected_size = m_ * ksub_ * subdimension_;
 
