@@ -16,6 +16,7 @@ enum class IndexFileType : std::uint32_t {
     kFlatIP = 1,
     kIVFFlat = 2,
     kIVFPQ = 3,
+    kHNSWFlat = 4,
 };
 
 class BinaryWriter {
