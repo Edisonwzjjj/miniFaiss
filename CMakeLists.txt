@@ -24,6 +24,8 @@ add_library(minifaiss STATIC
     src/index_ivf_flat.cpp
     src/index_ivf_pq.cpp
     src/index_hnsw_flat.cpp
+    src/collection_runtime.cpp
+    src/write_ahead_log.cpp
     src/product_quantizer.cpp
     src/search_executor.cpp
 )
@@ -70,6 +72,22 @@ add_executable(minifaiss_hnsw_flat_tests
 target_link_libraries(minifaiss_hnsw_flat_tests PRIVATE minifaiss)
 enable_project_warnings(minifaiss_hnsw_flat_tests)
 add_test(NAME minifaiss_hnsw_flat_tests COMMAND minifaiss_hnsw_flat_tests)
+
+add_executable(minifaiss_collection_runtime_tests
+    tests/collection_runtime_test.cpp
+)
+target_link_libraries(minifaiss_collection_runtime_tests PRIVATE minifaiss)
+enable_project_warnings(minifaiss_collection_runtime_tests)
+add_test(NAME minifaiss_collection_runtime_tests
+         COMMAND minifaiss_collection_runtime_tests)
+
+add_executable(minifaiss_write_ahead_log_tests
+    tests/write_ahead_log_test.cpp
+)
+target_link_libraries(minifaiss_write_ahead_log_tests PRIVATE minifaiss)
+enable_project_warnings(minifaiss_write_ahead_log_tests)
+add_test(NAME minifaiss_write_ahead_log_tests
+         COMMAND minifaiss_write_ahead_log_tests)
 
 add_executable(minifaiss_product_quantizer_tests
     tests/product_quantizer_test.cpp

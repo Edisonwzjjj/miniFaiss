@@ -2,4 +2,5 @@
 .build/
 .cache/
 .idea/
+.docs/
 compile_commands.json

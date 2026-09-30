@@ -36,6 +36,8 @@ public:
         std::span<const float> queries, std::size_t k,
         std::size_t ef_search) const;
 
+    [[nodiscard]] IndexId next_id() const noexcept;
+
 private:
     struct Node {
         IndexId id;

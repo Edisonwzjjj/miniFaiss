@@ -498,4 +498,7 @@ std::vector<std::vector<SearchResult>> IndexHNSWFlat::search_batch(
     return results;
 }
 
+IndexId IndexHNSWFlat::next_id() const noexcept {
+    return next_id_;
+}
 }  // namespace minifaiss
